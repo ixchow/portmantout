@@ -6,6 +6,7 @@
 #include <cassert>
 #include <vector>
 #include <deque>
+#include <time.h>
 
 class Level : public std::map< char, Level * > {
 public:
@@ -39,11 +40,24 @@ void count_tree(Counts &counts, Level *level, uint32_t depth) {
 	}
 }
 
+void stopwatch(const char *name) {
+	struct timespec ts;
+	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+	double now = double(ts.tv_sec) + 1.0e-9 * double(ts.tv_nsec);
+	static double prev = now;
+
+	std::cout << name << ": " << (now - prev) * 1000.0 << "ms" << std::endl;
+
+	prev = now;
+}
 
 int main(int argc, char **argv) {
-	//First, build a sort of tree-structured KMP matcher.
-	// so: tree that contains all words in the wordlist
-	// then, for every node without a next node, create back-edge to longest prefix in tree
+	stopwatch("start");
+
+	//This is a tree-based matcher with explicit backtracking.
+	// Doing this KMP-style (adding extra child edges that backtrack) would be slicker.
+	//compressing and localizing the tree (since all nodes are at most 26-out),
+	//  would almost certainly also be a performance win.
 	Level root;
 	{
 		std::set< char > symbols;
@@ -78,16 +92,21 @@ int main(int argc, char **argv) {
 		std::cout << counts.nodes << " nodes." << std::endl;
 	}
 
+	stopwatch("build");
+
 	std::string portmantout;
 	if (!std::getline(std::cin, portmantout) || portmantout.size() == 0) {
 		std::cerr << "Please pass a portmantout on stdin." << std::endl;
 		return 1;
 	}
 
+	stopwatch("read");
+
 	std::cout << "Testing portmantout of " << portmantout.size() << " letters." << std::endl;
 
 	uint32_t found_words = 0;
 
+	//TODO: check coverage by keeping track of letters since last terminal
 	std::deque< char > queue;
 	Level *at = &root;
 	for (auto c : portmantout) {
@@ -113,6 +132,8 @@ int main(int argc, char **argv) {
 			++found_words;
 		}
 	}
+
+	stopwatch("test");
 
 	std::cout << "Found " << found_words << " words." << std::endl;
 
