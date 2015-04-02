@@ -1,0 +1,24 @@
+KMP-ish tree matcher thing:
+
+state is (tree, # of letters you can remove without violating coverage)
+
+each backtracking edge checks # of letters removed vs state
+each terminal edge sets # of letters (possibly to max(current, word length) ?)
+
+------
+
+Running forward could build whole augmented tree state space
+tricky thing is that claiming one terminal claims all terminals in parallel versions (hmm)
+
+greedy is "plan shortest path to unclaimed terminal"
+alt is "unroll as big [most terminals] a context as possible over N letters"
+
+I wonder how many letters one could unroll before this gets silly.
+
+beam search?
+
+RRTs (state space == bit vector of terminals claimed, moves == plan to new terminal?)
+
+------
+
+For testing, should output coverage map from check and check-fast to make sure things are working properly. Coverage map can be one-char-per since longest word is 28 letters, max value should be <= 28.
