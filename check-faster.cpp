@@ -171,6 +171,11 @@ int main(int argc, char **argv) {
 			at = &root;
 		}
 	}
+	if (at->terminal > 0) {
+		at->terminal -= 1;
+		++found_words;
+	}
+
 
 	stopwatch("test");
 
