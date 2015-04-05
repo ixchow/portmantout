@@ -6,7 +6,7 @@
 #include <cassert>
 #include <vector>
 #include <deque>
-#include <time.h>
+#include "stopwatch.hpp"
 
 class Level : public std::map< char, Level * > {
 public:
@@ -38,17 +38,6 @@ void count_tree(Counts &counts, Level *level, uint32_t depth) {
 	for (auto c : *level) {
 		count_tree(counts, c.second, depth + 1);
 	}
-}
-
-void stopwatch(const char *name) {
-	struct timespec ts;
-	clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
-	double now = double(ts.tv_sec) + 1.0e-9 * double(ts.tv_nsec);
-	static double prev = now;
-
-	std::cout << name << ": " << (now - prev) * 1000.0 << "ms" << std::endl;
-
-	prev = now;
 }
 
 int main(int argc, char **argv) {
