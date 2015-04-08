@@ -10,9 +10,17 @@
 
 class Level : public std::map< char, Level * > {
 public:
-	Level() : terminal(0), rewind(NULL) { }
-	uint32_t terminal;
+	Level() : terminal(false), depth(-1U), safe(-1U), rewind(NULL), visited(false) { }
+	//set during initial build:
+	bool terminal;
+
+	//set during second build phase:
+	uint32_t depth; //how long is the prefix?
+	uint32_t safe; //how much of the prefix is a word?
 	Level *rewind;
+
+	//set during evaluation:
+	bool visited;
 };
 
 class Counts {
@@ -20,7 +28,7 @@ public:
 	Counts() : nodes(0), terminals(0) {
 	}
 	uint32_t nodes;
-	std::vector< uint32_t > terminals;
+	uint32_t terminals;
 	std::vector< uint32_t > depth;
 };
 
@@ -30,10 +38,9 @@ void count_tree(Counts &counts, Level *level, uint32_t depth) {
 	}
 	counts.depth[depth] += 1;
 
-	while (counts.terminals.size() <= level->terminal) {
-		counts.terminals.push_back(0);
+	if (level->terminal) {
+		counts.terminals += 1;
 	}
-	counts.terminals[level->terminal] += 1;
 
 	counts.nodes += 1;
 	for (auto c : *level) {
@@ -47,6 +54,45 @@ void dump_missing(std::string const &prefix, Level *level) {
 	}
 	for (auto c : *level) {
 		dump_missing(prefix + c.first, c.second);
+	}
+}
+
+void count_visited(Level &root, uint32_t *found_words, uint32_t *missed_words) {
+	//propagate visited information up the strata:
+	std::vector< std::vector< Level * > > strata;
+	strata.emplace_back(1, &root);
+	while (!strata.back().empty()) {
+		std::vector< Level * > next;
+		for (auto l : strata.back()) {
+			for (auto cl : *l) {
+				next.emplace_back(cl.second);
+			}
+		}
+		strata.emplace_back(std::move(next));
+	}
+	for (auto s = strata.rbegin(); s != strata.rend(); ++s) {
+		for (auto l : *s) {
+			if (!l->visited) {
+				for (auto cl : *l) {
+					if (cl.second->visited) {
+						l->visited = true;
+						break;
+					}
+				}
+			}
+			if (l->visited) {
+				if (l->rewind) {
+					l->rewind->visited = true;
+				}
+			}
+			if (l->terminal) {
+				if (l->visited) {
+					++(*found_words);
+				} else {
+					++(*missed_words);
+				}
+			}
+		}
 	}
 }
 
@@ -74,7 +120,8 @@ int main(int argc, char **argv) {
 				at = f->second;
 			}
 			assert(at);
-			at->terminal += 1;
+			assert(at->terminal == false);
+			at->terminal = true;
 		}
 		std::cout << "Have " << symbols.size() << " symbols." << std::endl;
 
@@ -83,13 +130,25 @@ int main(int argc, char **argv) {
 			std::vector< Level * > layer;
 			layer.push_back(&root);
 			root.rewind = NULL;
+			root.depth = 0;
+			root.safe = 0;
 			while (!layer.empty()) {
 				std::vector< Level * > next_layer;
 				for (auto l : layer) {
 					//update rewind pointers for children based on current rewind pointer.
 					for (auto cl : *l) {
 						next_layer.emplace_back(cl.second);
+						//depth:
+						cl.second->depth = l->depth + 1;
 
+						//safe:
+						if (cl.second->terminal) {
+							cl.second->safe = cl.second->depth;
+						} else {
+							cl.second->safe = l->safe;
+						}
+
+						//rewind:
 						Level *r = l->rewind;
 						while (r != NULL) {
 							assert(r != NULL);
@@ -110,6 +169,8 @@ int main(int argc, char **argv) {
 				}
 				layer = next_layer;
 			}
+
+			//set up safe characters in tree:
 		}
 
 		//unroll tree for some stats:
@@ -119,10 +180,7 @@ int main(int argc, char **argv) {
 		for (uint32_t i = 0; i < counts.depth.size(); ++i) {
 			std::cout << i << ": " << counts.depth[i] << std::endl;
 		}
-		std::cout << "Terminal counts: " << std::endl;
-		for (uint32_t i = 0; i < counts.terminals.size(); ++i) {
-			std::cout << i << ": " << counts.terminals[i] << std::endl;
-		}
+		std::cout << "Terminals: " << counts.terminals << std::endl;
 		std::cout << counts.nodes << " nodes." << std::endl;
 	}
 
@@ -138,15 +196,10 @@ int main(int argc, char **argv) {
 
 	std::cout << "Testing portmantout of " << portmantout.size() << " letters." << std::endl;
 
-	uint32_t found_words = 0;
-
 	Level *at = &root;
 	for (auto c : portmantout) {
 		while (at != NULL) {
-			if (at->terminal > 0) {
-				at->terminal -= 1;
-				++found_words;
-			}
+			at->visited = true;
 			auto f = at->find(c);
 			if (f != at->end()) {
 				at = f->second;
@@ -160,24 +213,25 @@ int main(int argc, char **argv) {
 			at = &root;
 		}
 	}
-	if (at->terminal > 0) {
-		at->terminal -= 1;
-		++found_words;
-	}
-
+	at->visited = true;
 
 	stopwatch("test");
 
-	std::cout << "Found " << found_words << " words." << std::endl;
+	{
+		//TODO: count terminals that are marked 'visited':
+		uint32_t found_words = 0;
+		uint32_t missed_words = 0;
+		count_visited(root, &found_words, &missed_words);
+		std::cout << "Found " << found_words << " words." << std::endl;
+		std::cout << "Missed " << missed_words << " words." << std::endl;
+	}
+
+	//dump_missing("", &root); //DEBUG
+
+	stopwatch("test - eval");
 
 	Counts counts;
 	count_tree(counts, &root, 0);
-
-	if (counts.terminals.size() > 1) {
-		std::cout << "Missing at least " << counts.terminals[1] << " words." << std::endl;
-		//dump_missing("", &root);
-		return 1;
-	}
 
 	return 0;
 
