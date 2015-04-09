@@ -23,6 +23,10 @@ int main(int argc, char **argv) {
 		size_t pos = portmantout.find(word);
 		bool found = (pos != std::string::npos);
 		while (pos != std::string::npos) {
+			/*for (uint32_t i = 0; i < pos; ++i) {
+				std::cout << '.';
+			}
+			std::cout << word << "\n";*/
 			for (uint32_t i = 0; i + 1 < word.size(); ++i) {
 				covering[pos + i] += 1;
 			}
@@ -30,33 +34,30 @@ int main(int argc, char **argv) {
 		}
 
 		if (!found) {
-			if (missing_words <= 10) {
+			/*if (missing_words <= 10) {
 				std::cerr << "'" << word << "' MISSING!" << std::endl;
-			}
+			}*/
 			++missing_words;
 		} else {
 			++found_words;
 		}
 		if ((missing_words + found_words) % 1000 == 0) {
-			std::cout << missing_words << "/" << found_words << std::endl;
+			std::cout << '.'; std::cout.flush();
+			//missing_words << "/" << found_words << std::endl;
 		}
 	}
 	std::cout << "Found " << found_words << " words." << std::endl;
 
-	bool covered = true;
-
+	uint32_t uncovered = 0;
 	for (auto c : covering) {
 		if (c == 0) {
-			covered = false;
-			std::cout << "Missing a covering!" << std::endl;
-			break;
+			++uncovered;
 		}
 	}
-	if (!covered) return false;
-	std::cout << "Fully covered." << std::endl;
+	std::cout << "Have " << uncovered << " uncovered transitions." << std::endl;
+	std::cerr << "Have " << missing_words << " missing words." << std::endl;
 
-	if (missing_words) {
-		std::cerr << "Have " << missing_words << " missing words." << std::endl;
+	if (uncovered || missing_words) {
 		return 1;
 	}
 
