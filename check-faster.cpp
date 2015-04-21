@@ -33,13 +33,17 @@ public:
 	uint32_t nodes;
 	uint32_t terminals;
 	std::vector< uint32_t > depth;
+	std::vector< uint32_t > children;
 };
 
 void count_tree(Counts &counts, Level *level, uint32_t depth) {
 	while (counts.depth.size() <= depth) {
 		counts.depth.push_back(0);
+		counts.children.push_back(0);
 	}
+	assert(counts.depth.size() == counts.children.size());
 	counts.depth[depth] += 1;
+	counts.children[depth] += level->size();
 
 	if (level->is_terminal()) {
 		counts.terminals += 1;
@@ -174,7 +178,7 @@ int main(int argc, char **argv) {
 		count_tree(counts, &root, 0);
 		std::cout << "Depths:" << std::endl;
 		for (uint32_t i = 0; i < counts.depth.size(); ++i) {
-			std::cout << i << ": " << counts.depth[i] << std::endl;
+			std::cout << i << ": " << counts.depth[i] << " avg children: " << double(counts.children[i]) / counts.depth[i] << std::endl;
 		}
 		std::cout << "Terminals: " << counts.terminals << std::endl;
 		std::cout << counts.nodes << " nodes." << std::endl;
