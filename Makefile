@@ -1,9 +1,9 @@
 .PHONY : all
 
-all : check check-fast check-faster
+all : check check-fast check-faster check-fasterer
 
 clean :
-	rm -f check check-fast check-faster
+	rm -f check check-fast check-faster check-fasterer
 
 
 OS := $(shell uname)
@@ -23,4 +23,7 @@ check-fast : check-fast.cpp stopwatch.hpp
 	$(CPP) -o $@ $<
 
 check-faster : check-faster.cpp stopwatch.hpp
+	$(CPP) -o $@ $<
+
+check-fasterer : check-fasterer.cpp stopwatch.hpp
 	$(CPP) -o $@ $<
