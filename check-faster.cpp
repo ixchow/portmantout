@@ -112,14 +112,11 @@ int main(int argc, char **argv) {
 	//  would almost certainly also be a performance win.
 	Level root;
 	{
-		std::set< char > symbols;
-
 		std::ifstream wordlist("wordlist.asc");
 		std::string word;
 		while (std::getline(wordlist, word)) {
 			Level *at = &root;
 			for (auto c : word) {
-				symbols.insert(c);
 				auto f = at->insert(std::make_pair(c, nullptr)).first;
 				if (f->second == NULL) {
 					f->second = new Level();
@@ -132,7 +129,6 @@ int main(int argc, char **argv) {
 			at->length = word.size();
 			assert(at->is_terminal() == true);
 		}
-		std::cout << "Have " << symbols.size() << " symbols." << std::endl;
 
 		//set up rewind pointers in tree, level-by-level:
 		{
@@ -172,7 +168,7 @@ int main(int argc, char **argv) {
 				layer = next_layer;
 			}
 		}
-
+#ifdef STATS
 		//unroll tree for some stats:
 		Counts counts;
 		count_tree(counts, &root, 0);
@@ -182,6 +178,7 @@ int main(int argc, char **argv) {
 		}
 		std::cout << "Terminals: " << counts.terminals << std::endl;
 		std::cout << counts.nodes << " nodes." << std::endl;
+#endif //STATS
 	}
 
 	stopwatch("build");
@@ -238,11 +235,11 @@ int main(int argc, char **argv) {
 				for (uint32_t i = 0; i < drop; ++i) {
 					assert(!lengths.empty());
 					if (lengths[0] == 0) {
-						std::cout << "Dropping uncovered character." << std::endl;
+						//std::cout << "Dropping uncovered character." << std::endl;
 						++uncovered_characters;
 						++uncovered_transitions; //because transition from uncovered is clearly uncovered
 					} else if (lengths[0] == 1) {
-						std::cout << "Found uncovered transition." << std::endl;
+						//std::cout << "Found uncovered transition." << std::endl;
 						++uncovered_transitions;
 					} else {
 						assert(lengths.size() >= 2);
@@ -257,24 +254,30 @@ int main(int argc, char **argv) {
 				//at the root, so evict character:
 				assert(ctx == "");
 				assert(lengths.size() == 0);
-				std::cout << "Character not found: " << (int)c << "." << std::endl;
+				//std::cout << "Character not found: " << (int)c << "." << std::endl;
 				missing_characters += 1;
+				uncovered_characters += 1;
 				count += 1;
 				break;
 			}
 		}
 	}
 
+	//always have one of each of these because dropping the last character
+	// (assuming non-null portmantout)
+	assert(missing_characters > 0 && uncovered_characters > 0 && uncovered_transitions > 0);
+	assert(count == portmantout.size() + 1);
+
+	missing_characters -= 1;
+	uncovered_characters -= 1;
+	uncovered_transitions -= 1;
+
 	std::cout << "Uncovered characters: " << uncovered_characters << std::endl;
 	std::cout << "Uncovered transitions: " << uncovered_transitions << std::endl;
 	std::cout << "Missing characters: " << missing_characters << std::endl;
 
-	assert(count == portmantout.size() + 1);
-
-	stopwatch("test");
 
 	{
-		//TODO: count terminals that are marked 'visited':
 		uint32_t found_words = 0;
 		uint32_t missed_words = 0;
 		count_visited(root, &found_words, &missed_words);
@@ -284,10 +287,7 @@ int main(int argc, char **argv) {
 
 	//dump_missing("", &root); //DEBUG
 
-	stopwatch("test - eval");
-
-	Counts counts;
-	count_tree(counts, &root, 0);
+	stopwatch("test");
 
 	return 0;
 
