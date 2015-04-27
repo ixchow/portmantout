@@ -28,5 +28,8 @@ check-faster : check-faster.cpp stopwatch.hpp
 check-fasterer : check-fasterer.cpp stopwatch.hpp
 	$(CPP) -o $@ $<
 
-compress : compress.cpp stopwatch.hpp
+compress : compress.cpp
+	$(CPP) -o $@ $<
+
+compress-tests : compress-tests.cpp
 	$(CPP) -o $@ $<
