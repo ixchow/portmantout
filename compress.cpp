@@ -8,7 +8,6 @@
 #include <algorithm>
 
 class Unique;
-class Unique2;
 
 class Node : public std::map< char, Node * > {
 public:
@@ -23,7 +22,6 @@ public:
 		f->second->add_string(s.substr(1));
 	}
 	void dagify_children(Unique &u);
-	void dagify_children(Unique2 &u);
 	uint32_t count() {
 		uint32_t ret = 1;
 		for (auto &c : *this) {
@@ -41,42 +39,6 @@ public:
 class Unique {
 public:
 	Unique() : fresh_id(0) { }
-	uint32_t fresh_id;
-	class NodeComp {
-	public:
-		bool operator()(Node *a, Node *b) {
-			if (a->terminal != b->terminal) return a->terminal < b->terminal;
-			if (a->size() != b->size()) return a->size() < b->size();
-			auto ia = a->begin(); auto ib = b->begin();
-			while (ia != a->end()) {
-				assert(ib != b->end());
-
-				if (*ia != *ib) return *ia < *ib;
-
-				++ia;
-				++ib;
-			}
-			assert(ib == b->end());
-			return false;
-		}
-	};
-	std::set< Node *, NodeComp > store;
-	Node *unique(Node *n) {
-		assert(n->id == -1U);
-		auto res = store.insert(n);
-		if (res.second == false) delete n;
-		else n->id = fresh_id++;
-		return *res.first;
-	}
-	uint32_t count() {
-		return store.size();
-	}
-};
-
-
-class Unique2 {
-public:
-	Unique2() : fresh_id(0) { }
 	uint32_t fresh_id;
 	class NodeComp {
 	public:
@@ -117,407 +79,274 @@ public:
 void Node::dagify_children(Unique &u) {
 	for (auto &c : *this) {
 		c.second->dagify_children(u);
-		c.second = u.unique(c.second);
-	}
-}
-
-
-void Node::dagify_children(Unique2 &u) {
-	for (auto &c : *this) {
-		c.second->dagify_children(u);
 		c.second = u.unique(c.first, c.second);
 	}
 }
 
+class Params {
+public:
+	Params() : verbose(false), letter_map(ByFrequency), peel(-1U) { }
+	bool verbose;
+	enum {
+		NoMap,
+		ByFrequency
+	} letter_map;
+	uint32_t peel;
+};
 
+void compress(std::vector< std::string > const &_wordlist, Params const &params) {
+	std::vector< std::string > wordlist = _wordlist;
 
-int main(int argc, char **argv) {
-
-	//Attempt to represent wordlist.asc in as little space as possible:
-	std::vector< std::string > wordlist;
-	{ //load:
-		std::ifstream file("wordlist.asc");
-		std::string word;
+	//re-order letters by frequency:
+	if (params.letter_map == Params::ByFrequency) {
 		std::map< char, uint32_t > counts;
-		while (std::getline(file, word)) {
-			wordlist.emplace_back(word);
+
+		for (auto word : wordlist) {
 			for (auto c : word) {
 				counts.insert(std::make_pair(c, 0)).first->second += 1;
 			}
 		}
 
-
-		//re-order by frequency:
 		std::vector< std::pair< uint32_t, char > > by_count;
 		for (auto c : counts) {
 			by_count.emplace_back(c.second, c.first);
 		}
-		assert(by_count.size() == 26);
 		std::sort(by_count.rbegin(), by_count.rend());
 		std::map< char, char > reorder;
 		for (auto bc : by_count) {
+			assert(!reorder.count(bc.second));
 			reorder[bc.second] = 'a' + reorder.size();
 		}
-		assert(reorder.size() == 26);
 		for (auto &word : wordlist) {
 			for (auto &c : word) {
 				assert(reorder.count(c));
 				c = reorder[c];
 			}
 		}
-
-
-		//massage:
-		std::sort(wordlist.begin(), wordlist.end(), [](std::string const &a, std::string const &b){
-			for (uint32_t i = 0; i < a.size() && i < b.size(); ++i) {
-				if (a[i] != b[i]) return a[i] < b[i];
-			}
-			return a.size() > b.size(); //longer words first 
-		});
-	}
-	std::cout << "Have " << wordlist.size() << " words." << std::endl;
-
-	//This version is okay but we need to start weighting the code space properly
-	//First idea: each word is represented by removing some number of letters from previous word and adding some number of new letters.
-
-	std::string prev = "";
-	std::map< uint32_t, uint32_t > removes;
-	std::map< uint32_t, uint32_t > adds;
-	std::map< uint32_t, uint32_t > letters;
-
-	std::map< uint32_t, uint32_t > acts;
-	std::map< uint32_t, std::map< uint32_t, uint32_t > > ctx_acts;
-	uint32_t prev_action = 0;
-	auto act = [&](uint32_t action) {
-		ctx_acts[prev_action].insert(std::make_pair(action, 0)).first->second += 1;
-		acts.insert(std::make_pair(action, 0)).first->second += 1;
-		prev_action = action;
-	};
-
-	for (auto word : wordlist) {
-		uint32_t common = 0;
-		while (common < prev.size() && common < word.size() && prev[common] == word[common]) {
-			++common;
-		}
-		uint32_t remove = prev.size() - common;
-		removes.insert(std::make_pair(remove, 0)).first->second += 1;
-
-		for (uint32_t i = 0; i < remove; ++i) {
-			act('^');
-		}
-
-		uint32_t add = word.size() - common;
-		adds.insert(std::make_pair(add, 0)).first->second += 1;
-
-
-		for (uint32_t i = common; i < word.size(); ++i) {
-			letters.insert(std::make_pair(word[i], 0)).first->second += 1;
-			act(word[i]);
-		}
-
-		act('<');
-
-		prev = word;
 	}
 
-	auto opt_bits = [](std::map< uint32_t, uint32_t > &counts) {
-		uint32_t total = 0;
-		for (auto c : counts) {
-			total += c.second;
+
+	/*
+	std::sort(wordlist.begin(), wordlist.end(), [](std::string const &a, std::string const &b){
+		for (uint32_t i = 0; i < a.size() && i < b.size(); ++i) {
+			if (a[i] != b[i]) return a[i] < b[i];
+		}
+		return a.size() > b.size(); //longer words first 
+	});*/
+
+	//Build a tree from the words:
+	Node root;
+	for (auto w : wordlist) {
+		root.add_string(w);
+	}
+
+	//Store some of the tree straight-up:
+
+	//each node is represented by:
+	// a bit saying if it's terminal,
+	// count of children,
+	// and then letters of children (as deltas)
+	std::vector< uint32_t > p1_terminals;
+	std::vector< uint32_t > p1_child_counts;
+	std::vector< uint32_t > p1_child_first_letters;
+	std::vector< uint32_t > p1_child_letter_deltas;
+
+	auto est_bits = [](std::vector< uint32_t > const &data) {
+		std::map< uint32_t, uint32_t > counts;
+		for (auto d : data) {
+			counts.insert(std::make_pair(d, 0)).first->second += 1;
 		}
 		double bits = 0.0;
 		for (auto c : counts) {
-			bits += c.second * -std::log2(double(c.second) / total);
+			bits += c.second * -std::log2(double(c.second) / data.size());
 		}
 		return bits;
+
 	};
 
-	double ctx_acts_bits = 0.0;
-	for (auto &at : ctx_acts) {
-		ctx_acts_bits += opt_bits(at.second);
+	std::vector< Node * > remaining;
+	remaining.emplace_back(&root);
+	for (uint32_t level = 0; level < params.peel; ++level) {
+		if (remaining.empty()) break;
+		std::vector< Node * > todo = std::move(remaining);
+		assert(remaining.empty());
+		for (auto n : todo) {
+			p1_terminals.push_back(n->terminal ? 1 : 0);
+			p1_child_counts.push_back(n->size());
+			char prev = 'a';
+			bool first = true;
+			for (auto cn : *n) {
+				remaining.emplace_back(cn.second);
+				if (first) {
+					p1_child_first_letters.push_back(cn.first);
+					first = false;
+				} else {
+					p1_child_letter_deltas.push_back(cn.first - prev);
+				}
+				prev = cn.first;
+			}
+		}
+	}
+
+	if (params.verbose) {
+		std::cout << "    Peeled into " << p1_terminals.size() << " terminals/counts and " << p1_child_letter_deltas.size() << " deltas." << std::endl;
+
+		std::cout << "That's " <<
+			(est_bits(p1_terminals)
+			+ est_bits(p1_child_counts)
+			+ est_bits(p1_child_first_letters)
+			+ est_bits(p1_child_letter_deltas)
+			) / 8.0
+			<< " bytes." << std::endl;
 	}
 
 
-	std::cout << "   Storing remove [" << removes.size() << " values] is " << opt_bits(removes) / 8.0 << " bytes total." << std::endl;
-	std::cout << "   Storing add [" << adds.size() << " values] is " << opt_bits(adds) / 8.0 << " bytes total." << std::endl;
-	std::cout << "   Storing letter [" << letters.size() << " values] is " << opt_bits(letters) / 8.0 << " bytes total." << std::endl;
-	std::cout << " => " << (opt_bits(removes) + opt_bits(adds) + opt_bits(letters)) / 8.0 << " bytes altogether." << std::endl;
-	std::cout << "\nAction is " << opt_bits(acts) / 8.0 << " bytes total." << std::endl;
-	std::cout << "Action+ctx is " << ctx_acts_bits / 8.0 << " bytes total." << std::endl;
+	Unique unique;
 
-	std::cout << "----------" << std::endl;
-	//------------------------------------------------------
-	//Okay, tree-peeling version.
-	// we're going to build a tree
-	{
-		Node root;
-		for (auto w : wordlist) {
-			root.add_string(w);
-		}
-	
-		std::map< uint32_t, uint32_t > strata_acts;
-		std::map< uint32_t, uint32_t > strata_counts;
-		std::map< uint32_t, uint32_t > strata_letters;
-		std::map< uint32_t, uint32_t > strata_deltas;
-	
-		std::vector< std::vector< Node * > > strata;
-		strata.emplace_back(1, &root);
-		while (1) {
-			std::vector< Node * > next;
-			for (auto n : strata.back()) {
-				strata_counts.insert(std::make_pair(n->size(),0)).first->second += 1;
-				char prev = 'a';
-				for (auto cn : *n) {
-					next.emplace_back(cn.second);
-					strata_acts.insert(std::make_pair(cn.first,0)).first->second += 1;
-					strata_letters.insert(std::make_pair(cn.first, 0)).first->second +=  1;
-					strata_deltas.insert(std::make_pair(cn.first - prev, 0)).first->second +=  1;
-					prev = cn.first;
-				}
-				strata_acts.insert(std::make_pair('<',0)).first->second += 1;
-			}
-			if (next.empty()) break;
-			strata.emplace_back(std::move(next));
-		}
-		std::cout << "Have " << strata.size() << " strata." << std::endl;
-		std::cout << "That would be " << opt_bits(strata_acts) / 8.0 << " bytes to peel [rle]." << std::endl;
-		std::cout << "        " << strata_counts.size() << " counts for " << opt_bits(strata_counts) / 8.0 << " bytes.\n";
-		std::cout << "        " << strata_letters.size() << " letters for " << opt_bits(strata_letters) / 8.0 << " bytes.\n";
-		std::cout << "        " << strata_deltas.size() << " deltas for " << opt_bits(strata_deltas) / 8.0 << " bytes.\n";
-		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_letters)) / 8.0 << " bytes to peel [count + letter]." << std::endl;
-		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_deltas)) / 8.0 << " bytes to peel [count + delta]." << std::endl;
-	
-		std::cout << "----------" << std::endl;
+	uint32_t pre_count = 0;
+	for (auto &n : remaining) {
+		pre_count += n->count();
+		n->dagify_children(unique);
+		//n = unique.unique('!', n);
 	}
 
-	//------------------------------------------------------
-	//I wonder if there's some DAG-ing to be had
-//	for (uint32_t split = 0; split < 10; ++split)
-	{
-		uint32_t split = 0; //6; //best so far
-		Node root;
-		for (auto w : wordlist) {
-			root.add_string(w);
+	if (params.verbose) {
+		std::cout << "   Unique from " << pre_count << " to " << unique.store.size() << std::endl;
+	}
+
+	//TODO: consider generating IDs via topological-sort-esque ordering
+
+	std::vector< uint32_t > p2_terminals;
+	std::vector< uint32_t > p2_child_counts;
+	std::vector< uint32_t > p2_child_ids;
+
+	//TODO: consider storing deltas
+	for (auto n : remaining) {
+		p2_terminals.push_back(n->terminal ? 1 : 0);
+		p2_child_counts.push_back(n->size());
+		for (auto cn : *n) {
+			assert(cn.second->id < unique.store.size());
+			p2_child_ids.push_back(cn.second->id);
 		}
+	}
 
-		std::map< uint32_t, uint32_t > strata_counts;
-		std::map< uint32_t, uint32_t > strata_letters;
-		std::map< uint32_t, uint32_t > strata_deltas;
+	if (params.verbose) {
+		std::cout << "    At transition, have " << p2_terminals.size() << " terminals/counts and " << p2_child_ids.size() << " ids." << std::endl;
+		std::cout << "That's " << (
+			est_bits(p2_terminals)
+			+ est_bits(p2_child_counts)
+			+ est_bits(p2_child_ids)
+			) / 8.0 << " bytes." << std::endl;
+	}
 
 
-		//levels below split get stored by strata, levels above split get id'd:
-		std::vector< std::vector< Node * > > strata;
-		strata.emplace_back(1, &root);
-		for (uint32_t level = 0; level < split; ++level) {
-			std::vector< Node * > next;
-			for (auto n : strata.back()) {
-				strata_counts.insert(std::make_pair(n->size(),0)).first->second += 1;
-				char prev = 'a';
-				for (auto cn : *n) {
-					next.emplace_back(cn.second);
-				//	strata_acts.insert(std::make_pair(cn.first,0)).first->second += 1;
-					strata_letters.insert(std::make_pair(cn.first, 0)).first->second +=  1;
-					strata_deltas.insert(std::make_pair(cn.first - prev, 0)).first->second +=  1;
-					prev = cn.first;
-				}
-				//strata_acts.insert(std::make_pair('<',0)).first->second += 1;
-			}
-			if (next.empty()) break;
-			strata.emplace_back(std::move(next));
-		}
-		/*
-		std::cout << "Peeled off " << strata.size() << " levels." << std::endl;
-		
-		std::cout << "        " << strata_counts.size() << " counts for " << opt_bits(strata_counts) / 8.0 << " bytes.\n";
-		std::cout << "        " << strata_letters.size() << " letters for " << opt_bits(strata_letters) / 8.0 << " bytes.\n";
-		std::cout << "        " << strata_deltas.size() << " deltas for " << opt_bits(strata_deltas) / 8.0 << " bytes.\n";
-		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_letters)) / 8.0 << " bytes to peel [count + letter]." << std::endl;
-		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_deltas)) / 8.0 << " bytes to peel [count + delta]." << std::endl;
-*/
+	//In this phase, store in order by id:
+	//  - each node gets its source letter
+	//  - if it's a terminal
+	//  - child count
+	//  - child ids
+	std::vector< uint32_t > p3_letters;
+	std::vector< uint32_t > p3_terminals;
+	std::vector< uint32_t > p3_child_counts;
+	std::vector< uint32_t > p3_child_id_deltas;
 
-		Unique unique;
 
-		uint32_t pre_count = 0;
-		for (auto n : strata.back()) {
-			pre_count += n->count();
-			n->dagify_children(unique);
-		}
+	std::vector< std::pair< uint32_t, Node * > > by_id;
+	for (auto n : unique.store) {
+		assert(n->id != -1U);
+		by_id.emplace_back(n->id, n);
+	}
+	std::sort(by_id.rbegin(), by_id.rend()); //decreasing order for some reason
+	assert(by_id.empty() || by_id.size() == by_id[0].second->id + 1);
 
-		std::cout << "From " << pre_count << " to " << unique.count() << std::endl;
 
-		std::map< uint32_t, uint32_t > unique_letters;
-		std::map< uint32_t, uint32_t > unique_counts;
-		std::map< uint32_t, uint32_t > unique_ids;
-		std::map< uint32_t, uint32_t > unique_deltas;
-
-		std::vector< std::pair< uint32_t, Node * > > by_id;
-		for (auto n : unique.store) {
-			assert(n->id != -1U);
-			by_id.emplace_back(n->id, n);
-		}
-		std::sort(by_id.rbegin(), by_id.rend());
-
-		//TODO: need to write down list of root's children
-		for (auto n_id : by_id) {
-			Node *n = n_id.second;
+	for (auto n_id : by_id) {
+		Node *n = n_id.second;
+		p3_letters.push_back(n->src);
+		p3_terminals.push_back(n->terminal ? 1 : 0);
+		p3_child_counts.push_back(n->size());
 			
-			std::vector< std::pair< uint32_t, std::pair< char, Node * > > > c_by_id;
-			for (auto c : *n) {
-				c_by_id.emplace_back(c.second->id, c);
-			}
-			std::sort(c_by_id.rbegin(), c_by_id.rend());
-
-			unique_counts.insert(std::make_pair(c_by_id.size(),0)).first->second += 1;
-			uint32_t prev = n->id;
-			for (auto c_id : c_by_id) {
-				auto c = c_id.second;
-				unique_letters.insert(std::make_pair(c.first, 0)).first->second +=  1;
-				unique_ids.insert(std::make_pair(c.second->id, 0)).first->second +=  1;
-				assert(c.second->id <= prev);
-				unique_deltas.insert(std::make_pair(prev - c.second->id, 0)).first->second +=  1;
-				prev = c.second->id;
-			}
+		std::vector< std::pair< uint32_t, std::pair< char, Node * > > > c_by_id;
+		for (auto c : *n) {
+			c_by_id.emplace_back(c.second->id, c);
 		}
+		std::sort(c_by_id.rbegin(), c_by_id.rend()); //also decreasing
 
-		std::cout << "        " << unique_counts.size() << " counts for " << opt_bits(unique_counts) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_letters.size() << " letters for " << opt_bits(unique_letters) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_ids.size() << " ids for " << opt_bits(unique_ids) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_deltas.size() << " deltas for " << opt_bits(unique_deltas) / 8.0 << " bytes.\n";
-		std::cout << "That would be " << (opt_bits(unique_counts) + opt_bits(unique_letters) + opt_bits(unique_deltas)) / 8.0 << " bytes to peel [counts + letters + deltas]." << std::endl;
-
-		std::cout << strata.size() << " -> " << (
-			  opt_bits(unique_counts)
-			+ opt_bits(unique_letters)
-			+ opt_bits(unique_deltas)
-			+ opt_bits(strata_counts)
-			+ opt_bits(strata_letters)
-			+ opt_bits(strata_deltas)
-			) / 8.0 << " bytes to peel [all w/ delta]." << std::endl;
-
+		uint32_t prev = n->id;
+		for (auto c_id : c_by_id) {
+			auto c = c_id.second;
+			assert(c.second->id <= prev);
+			p3_child_id_deltas.push_back(prev - c.second->id);
+			prev = c.second->id;
+		}
 	}
 
-	std::cout << "----------" << std::endl;
+	if (params.verbose) {
+		std::cout << "    Uniqued remaining into " << p3_terminals.size() << " terminals/letters/counts and " << p3_child_id_deltas.size() << " deltas." << std::endl;
 
-	//------------------------------------------------------
-	//Different DAG-style:
-	for (uint32_t split = 0; split < 10; ++split) {
-		//uint32_t split = 0; //TODO: investigate
-
-		Node root;
-		for (auto w : wordlist) {
-			root.add_string(w);
-		}
-
-		std::map< uint32_t, uint32_t > strata_counts;
-		std::map< uint32_t, uint32_t > strata_deltas;
-		std::map< uint32_t, uint32_t > strata_terminals;
-
-
-		//levels below split get stored by strata, levels above split get id'd:
-		std::vector< std::vector< Node * > > strata;
-		strata.emplace_back(1, &root);
-		for (uint32_t level = 0; level < split; ++level) {
-			std::vector< Node * > next;
-			for (auto n : strata.back()) {
-				strata_counts.insert(std::make_pair(n->size(),0)).first->second += 1;
-				strata_terminals.insert(std::make_pair(n->terminal ? 1 : 0, 0)).first->second += 1;
-				char prev = 'a';
-				for (auto cn : *n) {
-					next.emplace_back(cn.second);
-				//	strata_acts.insert(std::make_pair(cn.first,0)).first->second += 1;
-					strata_deltas.insert(std::make_pair(cn.first - prev, 0)).first->second +=  1;
-					prev = cn.first;
-				}
-				//strata_acts.insert(std::make_pair('<',0)).first->second += 1;
-			}
-			if (next.empty()) break;
-			strata.emplace_back(std::move(next));
-		}
-		
-		std::cout << "       Peeled off " << strata.size() << " levels." << std::endl;
-		
-		std::cout << "        " << strata_counts.size() << " counts for " << opt_bits(strata_counts) / 8.0 << " bytes.\n";
-		std::cout << "        " << strata_deltas.size() << " deltas for " << opt_bits(strata_deltas) / 8.0 << " bytes.\n";
-		std::cout << "        " << strata_terminals.size() << " terminals for " << opt_bits(strata_terminals) / 8.0 << " bytes.\n";
-		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_deltas)) / 8.0 << " bytes to peel [count + delta]." << std::endl;
-
-
-		Unique2 unique;
-
-		uint32_t pre_count = 0;
-		for (auto n : strata.back()) {
-			pre_count += n->count();
-			n->dagify_children(unique);
-		}
-
-		std::cout << "From " << pre_count << " to " << unique.count() << std::endl;
-
-		std::map< uint32_t, uint32_t > unique_letters;
-		std::map< uint32_t, uint32_t > unique_counts;
-		std::map< uint32_t, uint32_t > unique_ids;
-		std::map< uint32_t, uint32_t > unique_deltas;
-		std::map< uint32_t, uint32_t > unique_terminals;
-
-		std::vector< std::pair< uint32_t, Node * > > by_id;
-		for (auto n : unique.store) {
-			assert(n->id != -1U);
-			by_id.emplace_back(n->id, n);
-		}
-		std::sort(by_id.rbegin(), by_id.rend());
-
-		uint32_t skipped_letter = 0;
-
-		//TODO: need to write down list of root's children
-		for (auto n_id : by_id) {
-			Node *n = n_id.second;
-			
-			std::vector< std::pair< uint32_t, std::pair< char, Node * > > > c_by_id;
-			for (auto c : *n) {
-				c_by_id.emplace_back(c.second->id, c);
-			}
-			std::sort(c_by_id.rbegin(), c_by_id.rend());
-
-			if (n->src) {
-				unique_letters.insert(std::make_pair(n->src, 0)).first->second +=  1;
-			} else {
-				++skipped_letter;
-			}
-
-			unique_terminals.insert(std::make_pair(n->terminal ? 1 : 0, 0)).first->second += 1;
-
-			unique_counts.insert(std::make_pair(c_by_id.size(),0)).first->second += 1;
-			uint32_t prev = n->id;
-			for (auto c_id : c_by_id) {
-				auto c = c_id.second;
-				unique_ids.insert(std::make_pair(c.second->id, 0)).first->second +=  1;
-				assert(c.second->id <= prev);
-				unique_deltas.insert(std::make_pair(prev - c.second->id, 0)).first->second +=  1;
-				prev = c.second->id;
-			}
-		}
-
-		std::cout << "     " << skipped_letter << " letters skipped (transition)." << std::endl;
-
-		std::cout << "        " << unique_counts.size() << " counts for " << opt_bits(unique_counts) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_letters.size() << " letters for " << opt_bits(unique_letters) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_ids.size() << " ids for " << opt_bits(unique_ids) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_deltas.size() << " deltas for " << opt_bits(unique_deltas) / 8.0 << " bytes.\n";
-		std::cout << "        " << unique_terminals.size() << " terminals for " << opt_bits(unique_terminals) / 8.0 << " bytes.\n";
-		std::cout << "That would be " << (opt_bits(unique_counts) + opt_bits(unique_letters) + opt_bits(unique_deltas) + opt_bits(unique_terminals)) / 8.0 << " bytes to peel [c + l + d + t]." << std::endl;
-
-		std::cout << strata.size() << " -> " << (
-			  opt_bits(unique_counts)
-			+ opt_bits(unique_letters)
-			+ opt_bits(unique_deltas)
-			+ opt_bits(unique_terminals)
-			+ opt_bits(strata_counts)
-			+ opt_bits(strata_deltas)
-			+ opt_bits(strata_terminals)
-			) / 8.0 << " bytes to peel [all w/ delta]." << std::endl;
-
+		std::cout << "That's " <<
+			(est_bits(p3_terminals) + est_bits(p3_letters) + est_bits(p3_child_counts) + est_bits(p3_child_id_deltas)) / 8.0
+			<< " bytes." << std::endl;
 	}
 
 
+	if (params.letter_map == Params::ByFrequency) {
+		std::cout << "[f]";
+	} else if (params.letter_map == Params::NoMap) {
+		std::cout << "[ ]";
+	}
+	std::cout << " " << (int32_t)params.peel << "  -->  ";
+
+	double p1_bits =
+		est_bits(p1_terminals)
+		+ est_bits(p1_child_counts)
+		+ est_bits(p1_child_first_letters)
+		+ est_bits(p1_child_letter_deltas)
+		;
+
+	double p2_bits =
+		est_bits(p2_terminals)
+		+ est_bits(p2_child_counts)
+		+ est_bits(p2_child_ids)
+		;
+
+	double p3_bits =
+		est_bits(p3_terminals)
+		+ est_bits(p3_letters)
+		+ est_bits(p3_child_counts)
+		+ est_bits(p3_child_id_deltas)
+		;
+
+	std::cout << std::ceil((p1_bits + p2_bits + p3_bits) / 8.0)
+		<< " == " << std::ceil(p1_bits / 8.0)
+		<< " + " << std::ceil(p2_bits / 8.0)
+		<< " + " << std::ceil(p3_bits / 8.0) << std::endl;
+
+}
+
+
+
+int main(int argc, char **argv) {
+
+	std::vector< std::string > wordlist;
+	{ //load:
+		std::ifstream file("wordlist.asc");
+		std::string word;
+		while (std::getline(file, word)) {
+			wordlist.emplace_back(word);
+		}
+	}
+	std::cout << "Have " << wordlist.size() << " words." << std::endl;
+
+	Params params;
+
+	//params.verbose = true;
+	//params.peel = 6;
+	//compress(wordlist, params);
+
+	for (params.peel = 3; params.peel < 13; ++params.peel) {
+		compress(wordlist, params);
+	}
 
 	return 0;
 

@@ -400,8 +400,9 @@ int main(int argc, char **argv) {
 
 	//------------------------------------------------------
 	//Different DAG-style:
-	for (uint32_t split = 0; split < 10; ++split) {
-		//uint32_t split = 0; //TODO: investigate
+	//for (uint32_t split = 0; split < 10; ++split)
+	{
+		uint32_t split = 6; //TODO: investigate
 
 		Node root;
 		for (auto w : wordlist) {
@@ -439,7 +440,7 @@ int main(int argc, char **argv) {
 		std::cout << "        " << strata_counts.size() << " counts for " << opt_bits(strata_counts) / 8.0 << " bytes.\n";
 		std::cout << "        " << strata_deltas.size() << " deltas for " << opt_bits(strata_deltas) / 8.0 << " bytes.\n";
 		std::cout << "        " << strata_terminals.size() << " terminals for " << opt_bits(strata_terminals) / 8.0 << " bytes.\n";
-		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_deltas)) / 8.0 << " bytes to peel [count + delta]." << std::endl;
+		std::cout << "That would be " << (opt_bits(strata_counts) + opt_bits(strata_deltas) + opt_bits(strata_terminals)) / 8.0 << " bytes to peel [count + delta]." << std::endl;
 
 
 		Unique2 unique;

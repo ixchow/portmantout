@@ -9,7 +9,7 @@ clean :
 OS := $(shell uname)
 
 ifeq ($(OS), Linux)
-	CPP = g++ -Wall -Werror -O2 -std=c++11
+	CPP = g++ -Wall -Werror -O2 -std=c++11 -g
 else
 	CPP = clang++ -Wall -Werror -O2 -std=c++11
 endif
