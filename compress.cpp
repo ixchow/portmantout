@@ -7,6 +7,8 @@
 #include <set>
 #include <deque>
 #include <algorithm>
+#include <cmath>
+#include <random>
 
 class Unique;
 
@@ -415,7 +417,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		+ est_bits(s_id_counts_t)
 		+ est_bits(s_first_ids)
 		+ est_bits(s_first_ids_t)
-		+ est_bits(s_id_deltas);
+		+ est_bits(s_id_deltas)
 		+ est_bits(s_id_deltas_t);
 	std::cout << "Have " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 }
