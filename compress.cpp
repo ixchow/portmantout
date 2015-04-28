@@ -151,6 +151,49 @@ void report(const char *name, std::vector< uint32_t > const &data) {
 void compress(std::vector< std::string > const &_wordlist, Params const &params) {
 	std::vector< std::string > wordlist = _wordlist;
 
+	std::sort(wordlist.begin(), wordlist.end());
+
+	if (false) {
+		//depluralizin'
+		//ends up costing bytes because of s_bits storage
+		std::vector< uint32_t > s_bits;
+		for (uint32_t i = 0; i + 1 < wordlist.size(); /* later */) {
+			if (wordlist[i] + "s" == wordlist[i+1]) {
+				s_bits.push_back(1);
+				wordlist.erase(wordlist.begin() + i + 1);
+			} else {
+				s_bits.push_back(0);
+				++i;
+			}
+		}
+		report("s_bits", s_bits);
+	}
+
+	if (false) {
+		//qu elimination
+		//saves ~ 120 bytes
+		for (auto &word : wordlist) {
+			for (uint32_t i = 0; i + 1 < word.size(); /* later */) {
+				if (word.substr(i,2) == "qu") {
+					word = word.substr(0,i) + "~" + word.substr(i+2);
+				} else {
+					++i;
+				}
+			}
+		}
+	}
+	if (false) {
+		//stray q elimination? (can store all stray-q words in 82 bytes)
+		// only saves 34 bytes
+		for (uint32_t i = 0; i < wordlist.size(); /* later */) {
+			if (wordlist[i].find("q") != std::string::npos) {
+				wordlist.erase(wordlist.begin() + i);
+			} else {
+				++i;
+			}
+		}
+	}
+
 	//re-order letters by frequency:
 	if (params.letter_map == Params::ByFrequency) {
 		std::map< char, uint32_t > counts;
