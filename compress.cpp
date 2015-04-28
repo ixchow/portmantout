@@ -5,13 +5,14 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <deque>
 #include <algorithm>
 
 class Unique;
 
 class Node : public std::map< char, Node * > {
 public:
-	Node() : terminal(false), src('\0'), id(-1U) { }
+	Node() : terminal(false), src('\0'), id(-1U), refs(0) { }
 	void add_string(std::string s) {
 		if (s.empty()) {
 			terminal = true;
@@ -33,6 +34,7 @@ public:
 
 	char src; //used in unique2 code
 	uint32_t id; //used in unique code
+	uint32_t refs;
 };
 
 
@@ -43,7 +45,6 @@ public:
 	class NodeComp {
 	public:
 		bool operator()(Node *a, Node *b) {
-			assert(a->src != '\0' && b->src != '\0');
 			if (a->src != b->src) return a->src < b->src;
 			if (a->terminal != b->terminal) return a->terminal < b->terminal;
 			if (a->size() != b->size()) return a->size() < b->size();
@@ -66,8 +67,11 @@ public:
 		assert(n->src == '\0');
 		n->src = c;
 		auto res = store.insert(n);
-		if (res.second == false) delete n;
-		else n->id = fresh_id++;
+		if (res.second == false) {
+			delete n;
+		} else {
+			n->id = fresh_id++;
+		}
 		return *res.first;
 	}
 	uint32_t count() {
@@ -85,13 +89,18 @@ void Node::dagify_children(Unique &u) {
 
 class Params {
 public:
-	Params() : verbose(false), letter_map(ByFrequency), peel(-1U) { }
+	Params() : verbose(false), letter_map(NoMap), re_id(None), inline_single(false) { }
 	bool verbose;
 	enum {
 		NoMap,
 		ByFrequency
 	} letter_map;
-	uint32_t peel;
+	enum {
+		None,
+		RefCount,
+		Random
+	} re_id;
+	bool inline_single;
 };
 
 double est_bits_helper(std::vector< uint32_t > const &data) {
@@ -107,22 +116,34 @@ double est_bits_helper(std::vector< uint32_t > const &data) {
 }
 
 double est_bits(std::vector< uint32_t > const &data) {
-	double basic = est_bits_helper(data);
-	if (data.empty()) return basic;
+	return est_bits_helper(data);
+}
+
+double est_bits_delta(std::vector< uint32_t > const &data) {
+	if (data.empty()) return 0.0;
 
 	std::vector< uint32_t > deltas;
 	for (auto d = data.begin(); d + 1 < data.end(); ++d) {
 		deltas.push_back(*(d+1) - *d);
 	}
 
-	double delta = est_bits_helper(deltas);
+	return est_bits_helper(deltas);
+}
 
-	if (delta < basic) {
-		std::cout << "Delta was better." << std::endl;
-		return delta;
-	} else {
-		return basic;
+void report(const char *name, std::vector< uint32_t > const &data) {
+	std::map< uint32_t, uint32_t > counts;
+	for (auto d : data) {
+		counts.insert(std::make_pair(d, 0)).first->second += 1;
 	}
+	printf("%-20s : %5d items, %4d unique -> %5.0f [%5.0f] bytes (%3.2f [%3.2f] bits per)\n",
+		name,
+		(int)data.size(),
+		(int)counts.size(),
+		std::ceil(est_bits(data) / 8.0),
+		std::ceil(est_bits_delta(data) / 8.0),
+		est_bits(data) / data.size(),
+		est_bits_delta(data) / data.size()
+		);
 }
 
 
@@ -173,205 +194,197 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		root.add_string(w);
 	}
 
-	//Store some of the tree straight-up:
-
-	//each node is represented by:
-	// a bit saying if it's terminal,
-	// count of children,
-	// and then letters of children (as deltas)
-	std::vector< uint32_t > p1_terminals;
-	std::vector< uint32_t > p1_child_counts;
-	std::vector< uint32_t > p1_child_first_letters;
-	std::vector< uint32_t > p1_child_letter_deltas;
-
-	std::vector< Node * > remaining;
-	remaining.emplace_back(&root);
-	for (uint32_t level = 0; level < params.peel; ++level) {
-		if (remaining.empty()) break;
-		std::vector< Node * > todo = std::move(remaining);
-		assert(remaining.empty());
-		for (auto n : todo) {
-			p1_terminals.push_back(n->terminal ? 1 : 0);
-			p1_child_counts.push_back(n->size());
-			char prev = 'a';
-			bool first = true;
-			for (auto cn : *n) {
-				remaining.emplace_back(cn.second);
-				if (first) {
-					p1_child_first_letters.push_back(cn.first);
-					first = false;
-				} else {
-					p1_child_letter_deltas.push_back(cn.first - prev);
-				}
-				prev = cn.first;
-			}
-		}
-	}
-	#define REPORT(V) \
-		do { \
-			printf("%-24s: %6.0f items in %6.0f bytes.\n", #V, double(V.size()), std::ceil(est_bits(V) / 8.0)); \
-		} while (0)
-
-	if (params.verbose) {
-		REPORT(p1_terminals);
-		REPORT(p1_child_counts);
-		REPORT(p1_child_first_letters);
-		REPORT(p1_child_letter_deltas);
-	}
-
-
 	Unique unique;
+	root.dagify_children(unique);
+	unique.unique('\0', &root);
 
-	uint32_t pre_count = 0;
-	for (auto &n : remaining) {
-		pre_count += n->count();
-		n->dagify_children(unique);
-		//n = unique.unique('!', n);
-	}
-
-	/*if (params.verbose) {
-		std::cout << "   Unique from " << pre_count << " to " << unique.store.size() << std::endl;
-	}*/
-
-	//TODO: consider generating IDs via topological-sort-esque ordering
-
-	std::vector< uint32_t > p2_terminals;
-	std::vector< uint32_t > p2_child_counts;
-	std::vector< uint32_t > p2_child_ids;
-	std::vector< uint32_t > p2_child_firsts;
-	std::vector< uint32_t > p2_child_deltas;
-
-	//TODO: consider storing deltas
-	for (auto n : remaining) {
-		p2_terminals.push_back(n->terminal ? 1 : 0);
-		p2_child_counts.push_back(n->size());
-		std::vector< std::pair< uint32_t, Node * > > by_id;
-		for (auto cn : *n) {
-			by_id.emplace_back(cn.second->id, cn.second);
-		}
-		std::sort(by_id.begin(), by_id.end());
-
-		bool first = true;
-		uint32_t prev = 0;
-		for (auto cn : by_id) {
-			assert(cn.second->id < unique.store.size());
-			if (first) {
-				p2_child_firsts.push_back(cn.second->id);
-				first = false;
-			} else {
-				p2_child_deltas.push_back(cn.second->id - prev);
-			}
-			p2_child_ids.push_back(cn.second->id);
-			prev = cn.second->id;
-		}
-	}
-
-	if (params.verbose) {
-		REPORT(p2_terminals);
-		REPORT(p2_child_counts);
-		REPORT(p2_child_ids);
-		REPORT(p2_child_firsts);
-		REPORT(p2_child_deltas);
-	}
-
-
-	//In this phase, store in order by id:
-	//  - each node gets its source letter
-	//  - if it's a terminal
-	//  - child count
-	//  - child ids
-	std::vector< uint32_t > p3_letters;
-	std::vector< uint32_t > p3_terminals;
-	std::vector< uint32_t > p3_child_counts;
-	std::vector< uint32_t > p3_child_firsts;
-	std::vector< uint32_t > p3_child_deltas;
-
-
-	std::vector< std::pair< uint32_t, Node * > > by_id;
 	for (auto n : unique.store) {
-		assert(n->id != -1U);
-		by_id.emplace_back(n->id, n);
-	}
-	std::sort(by_id.rbegin(), by_id.rend()); //decreasing order for some reason
-	assert(by_id.empty() || by_id.size() == by_id[0].second->id + 1);
-
-
-	for (auto n_id : by_id) {
-		Node *n = n_id.second;
-		p3_letters.push_back(n->src);
-		p3_terminals.push_back(n->terminal ? 1 : 0);
-		p3_child_counts.push_back(n->size());
-			
-		std::vector< std::pair< uint32_t, std::pair< char, Node * > > > c_by_id;
-		for (auto c : *n) {
-			c_by_id.emplace_back(c.second->id, c);
-		}
-		std::sort(c_by_id.begin(), c_by_id.end()); //increasing
-
-		bool first = true;
-		uint32_t prev = 0;
-		for (auto c_id : c_by_id) {
-			auto c = c_id.second;
-			assert(c.second->id >= prev);
-			if (first) {
-				p3_child_firsts.push_back(c.second->id - n->id);
-				first = false;
-			} else {
-				p3_child_deltas.push_back(c.second->id - prev);
-			}
-			prev = c.second->id;
+		for (auto cn : *n) {
+			cn.second->refs += 1;
 		}
 	}
 
 	if (params.verbose) {
-		REPORT(p3_letters);
-		REPORT(p3_terminals);
-		REPORT(p3_child_counts);
-		REPORT(p3_child_firsts);
-		REPORT(p3_child_deltas);
+		std::cout << "   Unique from " << root.count() << " to " << unique.store.size() << std::endl;
+		/*
+		std::vector< uint32_t > hist;
+		for (auto n : unique.store) {
+			while (n->refs >= hist.size()) {
+				hist.push_back(0);
+			}
+			hist[n->refs] += 1;
+		}
+		for (uint32_t i = 0; i < hist.size(); ++i) {
+			if (hist[i] != 0) {
+				std::cout << "[" << i << "] " << hist[i] << std::endl;
+			}
+		}*/
 	}
 
-	const char *flag = "???";
-	if (params.letter_map == Params::ByFrequency) {
-		flag = "[f]";
-	} else if (params.letter_map == Params::NoMap) {
-		flag = "[ ]";
+	//let's re-id by reference frequency (not sure how useful, but worth a shot:
+	if (params.re_id == Params::RefCount) {
+		std::multimap< uint32_t, Node * > by_refs;
+		for (auto n : unique.store) {
+			by_refs.insert(std::make_pair(n->refs, n));
+		}
+		uint32_t fresh_id = 0;
+		for (auto r = by_refs.rbegin(); r != by_refs.rend(); ++r) {
+			r->second->id = fresh_id++;
+		}
+		assert(fresh_id == unique.fresh_id);
+	} else if (params.re_id == Params::Random) {
+		std::mt19937 mt(rand());
+		std::vector< uint32_t > ids;
+		ids.reserve(unique.fresh_id);
+		for (uint32_t i = 0; i < unique.fresh_id; ++i) {
+			ids.push_back(i);
+		}
+		for (uint32_t i = 0; i < ids.size(); ++i) {
+			std::swap(ids[i], ids[i + (mt() % (ids.size() - i))]);
+		}
+		auto id = ids.begin();
+		for (auto n : unique.store) {
+			assert(id != ids.end());
+			n->id = *id;
+			++id;
+		}
+		assert(id == ids.end());
+	} else {
+		assert(params.re_id == Params::None);
 	}
 
-	double p1_bits =
-		est_bits(p1_terminals)
-		+ est_bits(p1_child_counts)
-		+ est_bits(p1_child_first_letters)
-		+ est_bits(p1_child_letter_deltas)
-		;
+	std::vector< uint32_t > s_letters;
+	std::vector< uint32_t > s_terminals;
+	std::vector< uint32_t > s_child_counts;
+	std::vector< uint32_t > s_first_letters;
+	std::vector< uint32_t > s_letter_deltas;
+	std::vector< uint32_t > s_id_counts;
+	std::vector< uint32_t > s_first_ids;
+	std::vector< uint32_t > s_id_deltas;
 
-	double p2_bits =
-		est_bits(p2_terminals)
-		+ est_bits(p2_child_counts)
-		+ std::min(
-			est_bits(p2_child_firsts) + est_bits(p2_child_deltas),
-			est_bits(p2_child_ids)
-		);
 
-	double p3_bits =
-		est_bits(p3_terminals)
-		+ est_bits(p3_letters)
-		+ est_bits(p3_child_counts)
-		+ est_bits(p3_child_firsts)
-		+ est_bits(p3_child_deltas)
-		;
 
-	printf("%s %2d --> %6.0f == %6.0f + %6.0f + %6.0f\n", flag, params.peel,
-		std::ceil((p1_bits + p2_bits + p3_bits) / 8.0),
-		std::ceil(p1_bits / 8.0),
-		std::ceil(p2_bits / 8.0),
-		std::ceil(p3_bits / 8.0) );
+	{ //store tree in fragments by refs
+		std::vector< uint32_t > size_hist;
 
+		//let's store by (descending) id:
+		std::vector< std::pair< uint32_t, Node * > > by_id;
+		for (auto n : unique.store) {
+			by_id.emplace_back(n->id, n);
+		}
+		std::sort(by_id.rbegin(), by_id.rend());
+		for (auto seed_ : by_id) {
+			Node *seed = seed_.second;
+			if (seed->refs == 1 || (params.inline_single && seed->size() == 0)) continue; //nope, don't need it
+
+			if (seed->refs == 0) {
+				//don't store letter for root
+				assert(seed->src == '\0');
+			} else {
+				assert(seed->src != '\0');
+				s_letters.push_back(seed->src);
+			}
+
+			uint32_t fragment_size = 0;
+
+			std::deque< Node * > todo;
+			todo.push_back(seed);
+			while (!todo.empty()) {
+				Node *n = todo.front();
+				todo.pop_front();
+				++fragment_size;
+
+				std::vector< std::pair< char, Node * > > children;
+				std::vector< uint32_t > ids;
+				for (auto cn : *n) {
+					assert(cn.second->refs >= 1);
+					//store refs == 1 nodes or nodes with no children inline:
+					if (cn.second->refs == 1 || (params.inline_single && cn.second->size() == 0)) {
+						//will be stored inline
+						children.emplace_back(cn.first, cn.second);
+					} else {
+						//will be stored by reference
+						ids.push_back(cn.second->id);
+					}
+				}
+				//store ids in order:
+				std::sort(ids.begin(), ids.end());
+				//store children in order as well (should already be sorted -- map):
+				std::sort(children.begin(), children.end());
+
+				if (!children.empty()) { //children
+					s_first_letters.push_back(children[0].first);
+					for (uint32_t i = 1; i < children.size(); ++i) {
+						s_letter_deltas.push_back(children[i].first - children[i-1].first);
+					}
+				}
+				if (!ids.empty()) {
+					s_first_ids.push_back(ids[0]);
+					for (uint32_t i = 1; i < ids.size(); ++i) {
+						s_id_deltas.push_back(ids[i] - ids[i-1]);
+					}
+				}
+
+				if (children.empty() && ids.empty()) {
+					assert(n->terminal);
+					s_child_counts.push_back(children.size());
+					s_id_counts.push_back(ids.size());
+				} else {
+					s_terminals.push_back(n->terminal ? 1 : 0);
+					s_child_counts.push_back(children.size());
+					s_id_counts.push_back(ids.size());
+				}
+
+				for (auto c : children) {
+					todo.push_back(c.second);
+				}
+			}
+
+			while (fragment_size >= size_hist.size()) {
+				size_hist.push_back(0);
+			}
+			size_hist[fragment_size] += 1;
+		}
+
+
+		if (params.verbose) {
+			for (uint32_t i = 0; i < size_hist.size(); ++i) {
+				if (size_hist[i] != 0) {
+					std::cout << "|" << i << "| " << size_hist[i] << std::endl;
+				}
+			}
+		}
+
+	}
+
+#define REPORT(V) report(#V, V)
+	if (params.verbose) {
+		REPORT(s_letters);
+		REPORT(s_terminals);
+		REPORT(s_child_counts);
+		REPORT(s_first_letters);
+		REPORT(s_letter_deltas);
+		REPORT(s_id_counts);
+		REPORT(s_first_ids);
+		REPORT(s_id_deltas);
+	}
+#undef REPORT
+	double bits =
+		std::min(est_bits(s_letters), est_bits_delta(s_letters))
+		+ est_bits(s_terminals)
+		+ est_bits(s_child_counts)
+		+ est_bits(s_first_letters)
+		+ est_bits(s_letter_deltas)
+		+ est_bits(s_id_counts)
+		+ est_bits(s_first_ids)
+		+ est_bits(s_id_deltas);
+	std::cout << "Have " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 }
 
 
 
 int main(int argc, char **argv) {
+	srand(time(0));
 
 	std::vector< std::string > wordlist;
 	{ //load:
@@ -385,9 +398,12 @@ int main(int argc, char **argv) {
 
 	Params params;
 
+#define SINGLE
 #ifdef SINGLE
 	params.verbose = true;
-	params.peel = 5;
+	params.letter_map = Params::ByFrequency;
+	params.re_id = Params::RefCount;
+	params.inline_single = false;
 	compress(wordlist, params);
 #else
 	for (params.peel = 3; params.peel < 13; ++params.peel) {
