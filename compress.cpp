@@ -91,18 +91,53 @@ void Node::dagify_children(Unique &u) {
 
 class Params {
 public:
-	Params() : verbose(false), letter_map(NoMap), re_id(None), inline_single(false) { }
+	Params() : verbose(false), letter_map(NoMap), re_id(None), inline_single(false), reverse(false) { }
 	bool verbose;
-	enum {
+	enum LetterMap : int {
 		NoMap,
-		ByFrequency
+		ByFrequency,
+		MapCount
 	} letter_map;
-	enum {
+	enum ReID : int {
 		None,
 		RefCount,
-		Random
+		Random,
+		IdCount
 	} re_id;
 	bool inline_single;
+	bool reverse;
+	std::string describe() const {
+		std::string desc = "";
+		if (letter_map == NoMap) {
+			desc += "-";
+		} else if (letter_map == ByFrequency) {
+			desc += "f";
+		} else {
+			assert(0 && "Unknown letter map.");
+		}
+
+		if (re_id == None) {
+			desc += "-";
+		} else if (re_id == RefCount) {
+			desc += "c";
+		} else if (re_id == Random) {
+			desc += "*";
+		} else {
+			assert(0 && "Unknown re-id mode.");
+		}
+
+		if (inline_single) {
+			desc += "i";
+		} else {
+			desc += "-";
+		}
+		if (reverse) {
+			desc += "~";
+		} else {
+			desc += "-";
+		}
+		return desc;
+	}
 };
 
 double est_bits_helper(std::vector< uint32_t > const &data) {
@@ -137,7 +172,7 @@ void report(const char *name, std::vector< uint32_t > const &data) {
 	for (auto d : data) {
 		counts.insert(std::make_pair(d, 0)).first->second += 1;
 	}
-	printf("%-20s : %5d items, %4d unique -> %5.0f [%5.0f] bytes (%3.2f [%3.2f] bits per)\n",
+	printf("%-20s : %5d items, %4d unique -> %5.0f [%5.0f] bytes (%5.2f [%5.2f] bits per)\n",
 		name,
 		(int)data.size(),
 		(int)counts.size(),
@@ -152,6 +187,21 @@ void report(const char *name, std::vector< uint32_t > const &data) {
 
 void compress(std::vector< std::string > const &_wordlist, Params const &params) {
 	std::vector< std::string > wordlist = _wordlist;
+
+	if (params.reverse) {
+		//reverse words:
+		for (auto &w : wordlist) {
+			std::reverse(w.begin(), w.end());
+		}
+	}
+
+	/*if (true) {
+		//sort words (this destroys information):
+		//and... weirdly... makes storage take *more* space
+		for (auto &w : wordlist) {
+			std::sort(w.begin(), w.end());
+		}
+	}*/
 
 	//re-order letters by frequency:
 	if (params.letter_map == Params::ByFrequency) {
@@ -180,7 +230,6 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 			}
 		}
 	}
-
 
 	/*
 	std::sort(wordlist.begin(), wordlist.end(), [](std::string const &a, std::string const &b){
@@ -419,7 +468,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		+ est_bits(s_first_ids_t)
 		+ est_bits(s_id_deltas)
 		+ est_bits(s_id_deltas_t);
-	std::cout << "Have " << std::ceil(bits / 8.0) << " bytes." << std::endl;
+	std::cout << "[" << params.describe() << "] " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 }
 
 
@@ -445,10 +494,30 @@ int main(int argc, char **argv) {
 	params.letter_map = Params::ByFrequency;
 	params.re_id = Params::RefCount;
 	params.inline_single = false;
+	params.reverse = false;
+	compress(wordlist, params);
+	params.reverse = true;
 	compress(wordlist, params);
 #else
-	for (params.peel = 3; params.peel < 13; ++params.peel) {
-		compress(wordlist, params);
+	params.verbose = false;
+
+	for (int letter_map = 0; letter_map < Params::MapCount; ++letter_map)
+	for (int re_id = 0; re_id < Params::IdCount; ++re_id)
+	for (int inline_single = 0; inline_single < 2; ++inline_single)
+	for (int reverse = 0; reverse < 2; ++reverse)
+	{
+
+		params.letter_map = (Params::LetterMap)letter_map;
+		params.re_id = (Params::ReID)re_id;
+		params.inline_single = inline_single;
+		params.reverse = reverse;
+		uint32_t iters = 1;
+		/*if (params.re_id == Params::Random) {
+			iters = 10;
+		}*/
+		for (uint32_t iter = 0; iter < iters; ++iter) {
+			compress(wordlist, params);
+		}
 	}
 #endif
 
