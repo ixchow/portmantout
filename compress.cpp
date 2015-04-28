@@ -184,9 +184,57 @@ void report(const char *name, std::vector< uint32_t > const &data) {
 }
 
 
+#define REPORT(V) report(#V, V)
 
 void compress(std::vector< std::string > const &_wordlist, Params const &params) {
 	std::vector< std::string > wordlist = _wordlist;
+
+	if (false) { //remove words ending in suffix:
+		std::string suf = "ing";
+		std::set< std::string > words;
+		for (auto w : wordlist) {
+			if (w.size() < suf.size() || w.substr(w.size()-suf.size()) != suf) {
+				words.insert(w);
+			}
+		}
+		std::set< std::string > stems;
+		for (auto w : wordlist) {
+			if (w.size() >= suf.size() && w.substr(w.size()-suf.size()) == suf) {
+				if (words.count(w.substr(0, w.size()-suf.size()))) {
+					stems.insert(w.substr(0, w.size()-suf.size()));
+				} else {
+					words.insert(w);
+				}
+			}
+		}
+		std::cout << "After removing '" << suf << "', have " << words.size() << " words, " << stems.size() << " of which are stems." << std::endl;
+
+		wordlist = std::vector< std::string >(words.begin(), words.end());
+
+		std::sort(wordlist.begin(), wordlist.end(), [](std::string const &a, std::string const &b){
+			return a.substr(a.size()-1) < b.substr(b.size()-1);
+		});
+
+		std::vector< uint32_t > s_stem;
+
+		for (auto w : wordlist) {
+			s_stem.push_back(stems.count(w));
+		}
+
+		REPORT(s_stem);
+
+		std::sort(wordlist.begin(), wordlist.end());
+
+		s_stem.clear();
+
+		for (auto w : wordlist) {
+			s_stem.push_back(stems.count(w));
+		}
+
+		REPORT(s_stem);
+
+
+	}
 
 	if (params.reverse) {
 		//reverse words:
@@ -194,14 +242,6 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 			std::reverse(w.begin(), w.end());
 		}
 	}
-
-	/*if (true) {
-		//sort words (this destroys information):
-		//and... weirdly... makes storage take *more* space
-		for (auto &w : wordlist) {
-			std::sort(w.begin(), w.end());
-		}
-	}*/
 
 	//re-order letters by frequency:
 	if (params.letter_map == Params::ByFrequency) {
@@ -435,7 +475,6 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 
 	}
 
-#define REPORT(V) report(#V, V)
 	if (params.verbose) {
 		REPORT(s_letters);
 		REPORT(s_terminals);
@@ -495,8 +534,6 @@ int main(int argc, char **argv) {
 	params.re_id = Params::RefCount;
 	params.inline_single = false;
 	params.reverse = false;
-	compress(wordlist, params);
-	params.reverse = true;
 	compress(wordlist, params);
 #else
 	params.verbose = false;
