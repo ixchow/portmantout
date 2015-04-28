@@ -256,11 +256,17 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 	std::vector< uint32_t > s_letters;
 	std::vector< uint32_t > s_terminals;
 	std::vector< uint32_t > s_child_counts;
+	std::vector< uint32_t > s_child_counts_t;
 	std::vector< uint32_t > s_first_letters;
+	std::vector< uint32_t > s_first_letters_t;
 	std::vector< uint32_t > s_letter_deltas;
+	std::vector< uint32_t > s_letter_deltas_t;
 	std::vector< uint32_t > s_id_counts;
+	std::vector< uint32_t > s_id_counts_t;
 	std::vector< uint32_t > s_first_ids;
+	std::vector< uint32_t > s_first_ids_t;
 	std::vector< uint32_t > s_id_deltas;
+	std::vector< uint32_t > s_id_deltas_t;
 
 
 
@@ -313,27 +319,48 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 				std::sort(children.begin(), children.end());
 
 				if (!children.empty()) { //children
-					s_first_letters.push_back(children[0].first);
+					if (n->terminal) {
+						s_first_letters_t.push_back(children[0].first);
+					} else {
+						s_first_letters.push_back(children[0].first);
+					}
 					for (uint32_t i = 1; i < children.size(); ++i) {
-						s_letter_deltas.push_back(children[i].first - children[i-1].first);
+						if (n->terminal) {
+							s_letter_deltas_t.push_back(children[i].first - children[i-1].first);
+						} else {
+							s_letter_deltas.push_back(children[i].first - children[i-1].first);
+						}
 					}
 				}
 				if (!ids.empty()) {
-					s_first_ids.push_back(ids[0]);
+					if (n->terminal) {
+						s_first_ids_t.push_back(ids[0]);
+					} else {
+						s_first_ids.push_back(ids[0]);
+					}
 					for (uint32_t i = 1; i < ids.size(); ++i) {
-						s_id_deltas.push_back(ids[i] - ids[i-1]);
+						if (n->terminal) {
+							s_id_deltas_t.push_back(ids[i] - ids[i-1]);
+						} else {
+							s_id_deltas.push_back(ids[i] - ids[i-1]);
+						}
 					}
 				}
 
-				if (children.empty() && ids.empty()) {
+				/*if (children.empty() && ids.empty()) {
 					assert(n->terminal);
-					s_child_counts.push_back(children.size());
-					s_id_counts.push_back(ids.size());
-				} else {
+					s_child_counts_t.push_back(children.size());
+					s_id_counts_t.push_back(ids.size());
+				} else {*/
 					s_terminals.push_back(n->terminal ? 1 : 0);
-					s_child_counts.push_back(children.size());
-					s_id_counts.push_back(ids.size());
-				}
+					if (n->terminal) {
+						s_child_counts_t.push_back(children.size());
+						s_id_counts_t.push_back(ids.size());
+					} else {
+						s_child_counts.push_back(children.size());
+						s_id_counts.push_back(ids.size());
+					}
+				//}
 
 				for (auto c : children) {
 					todo.push_back(c.second);
@@ -362,22 +389,34 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		REPORT(s_letters);
 		REPORT(s_terminals);
 		REPORT(s_child_counts);
+		REPORT(s_child_counts_t);
 		REPORT(s_first_letters);
+		REPORT(s_first_letters_t);
 		REPORT(s_letter_deltas);
+		REPORT(s_letter_deltas_t);
 		REPORT(s_id_counts);
+		REPORT(s_id_counts_t);
 		REPORT(s_first_ids);
+		REPORT(s_first_ids_t);
 		REPORT(s_id_deltas);
+		REPORT(s_id_deltas_t);
 	}
 #undef REPORT
 	double bits =
 		std::min(est_bits(s_letters), est_bits_delta(s_letters))
 		+ est_bits(s_terminals)
 		+ est_bits(s_child_counts)
+		+ est_bits(s_child_counts_t)
 		+ est_bits(s_first_letters)
+		+ est_bits(s_first_letters_t)
 		+ est_bits(s_letter_deltas)
+		+ est_bits(s_letter_deltas_t)
 		+ est_bits(s_id_counts)
+		+ est_bits(s_id_counts_t)
 		+ est_bits(s_first_ids)
+		+ est_bits(s_first_ids_t)
 		+ est_bits(s_id_deltas);
+		+ est_bits(s_id_deltas_t);
 	std::cout << "Have " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 }
 
