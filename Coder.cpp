@@ -6,65 +6,57 @@
 #include <sstream>
 #include <ctime>
 
-Coder::Coder() : params(max_digit) {
+Coder::Coder() {
 	interval.base.set_zero();
 	interval.length.set_max();
 }
 
-void Coder::write(int32_t val, Distribution &dist) {
+void Coder::write(int32_t val, Distribution const &dist) {
 	assert(dist.counts.count(val));
 
+	auto range = dist.range(val);
 
+	interval.length.div(0x10000);
+	assert(interval.length.is_nonzero());
 
-	//update base and length for symbol 'val' out of 'max_val'
-	interval.length /= uint32_t(max_val) + 1;
+	bool carry_out;
+	Frac temp = interval.length;
+	temp.mul(range.first);
+	interval.base.add(temp, &carry_out);
 
-	interval.length *= val;
+	interval.length.mul(range.second - range.first + 1);
 
-	uint64_t new_base = uint64_t(interval.base) + uint64_t(interval.length) * uint64_t(val);
-	if (new_base > params.max_length) {
-		new_base -= uint64_t(params.max_length) + 1;
+	if (carry_out) {
 		carry();
 	}
-	assert(new_base <= params.max_length);
-	interval.base = new_base;
 
-	//re-normalize (== 'emit digits') if needed:
-	while (interval.length <= params.renorm_length) {
-		uint32_t msd_of_base = interval.base / (params.renorm_length + 1);
-		//assert(msd_of_base < params.digits);
-		output.push_back(msd_of_base);
-
-		interval.base -= msd_of_base * (params.renorm_length + 1);
-		//assert(interval.base <= params.renorm_length);
-		interval.base *= params.digits;
-		//assert(interval.base <= params.max_length);
-		interval.length *= params.digits;
+	while (interval.length.digits[0] == 0) {
+		assert(interval.length.is_nonzero());
+		output.push_back(interval.base.digits[0]);
+		interval.base.digits[0] = 0;
+		interval.base.mul(Frac::MaxDigit + 1);
+		interval.length.mul(Frac::MaxDigit + 1);
 	}
 }
 
 void Coder::carry() {
-	assert(!output.empty());
-	//push carry into output if needed:
-	auto iter = output.rbegin();
-	while (*iter == params.digits - 1) {
-		*iter = 0;
-		++iter;
-		assert(iter != output.rend());
+	auto o = output.rbegin();
+	while (1) {
+		assert(o != output.rend());
+		*o += 1;
+		if (*o > Frac::MaxDigit) {
+			*o -= (Frac::MaxDigit + 1);
+		} else {
+			break;
+		}
+		++o;
 	}
-	*iter += 1;
 }
 
 void Coder::finish() {
-	uint32_t msd_of_base = interval.base / (params.renorm_length + 1);
+	uint32_t msd_of_base = interval.base.digits[0];
 
-	if (interval.base - msd_of_base * (params.renorm_length + 1) == 0) {
-		//Special case:
-		// if base is d0...0 need to output d instead of d + 1
-		// since if length is 10...0, d + 1 would be an error.
-		output.push_back(msd_of_base);
-	} else if (msd_of_base + 1 == params.digits) {
-		//otherwise if d+1 would carry, just carry:
+	if (msd_of_base + 1 > Frac::MaxDigit) {
 		carry();
 	} else {
 		output.push_back(msd_of_base + 1);

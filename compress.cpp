@@ -10,6 +10,8 @@
 #include <cmath>
 #include <random>
 
+#include "Coder.hpp"
+
 class Unique;
 
 class Node : public std::map< char, Node * > {
@@ -181,6 +183,30 @@ void report(const char *name, std::vector< uint32_t > const &data) {
 		est_bits(data) / data.size(),
 		est_bits_delta(data) / data.size()
 		);
+	Coder init, equal, adapt;
+	{
+		std::map< int32_t, uint32_t > fixed(counts.begin(), counts.end());
+		Distribution dist(fixed);
+		for (auto d : data) {
+			init.write(d, dist);
+		}
+	}
+	{
+		std::map< int32_t, uint32_t > blank(counts.begin(), counts.end());
+		for (auto &b : blank) {
+			b.second = 1;
+		}
+		Distribution dist(blank);
+		for (auto d : data) {
+			equal.write(d, dist);
+		}
+		for (auto d : data) {
+			adapt.write(d, dist);
+			dist.update_for_val(d);
+		}
+	}
+	printf("   init: %d, equal: %d, adapt: %d\n", (int)init.output.size(), (int)equal.output.size(), (int)adapt.output.size());
+
 }
 
 
