@@ -93,8 +93,9 @@ void Node::dagify_children(Unique &u) {
 
 class Params {
 public:
-	Params() : verbose(false), letter_map(NoMap), re_id(None), inline_single(false), reverse(false) { }
+	Params() : verbose(false), verbose_split(false), letter_map(NoMap), re_id(None), split(NoSplit), inline_single(false), reverse(false) { }
 	bool verbose;
+	bool verbose_split;
 	enum LetterMap : int {
 		NoMap,
 		ByFrequency,
@@ -106,6 +107,11 @@ public:
 		Random,
 		IdCount
 	} re_id;
+	enum Split : int {
+		NoSplit,
+		SingleSplit,
+		SplitCount
+	} split;
 	bool inline_single;
 	bool reverse;
 	std::string describe() const {
@@ -142,22 +148,34 @@ public:
 	}
 };
 
-double est_bits_helper(std::vector< uint32_t > const &data) {
-	std::map< uint32_t, uint32_t > counts;
-	for (auto d : data) {
-		counts.insert(std::make_pair(d, 0)).first->second += 1;
+class Context : public std::map< const char *, int32_t > {
+public:
+	void operator()(const char *label, int32_t value) {
+		insert(std::make_pair(label, value));
+	}
+};
+
+double est_bits_helper(std::map< int32_t, uint32_t > const &counts) {
+	uint32_t total = 0;
+	for (auto c : counts) {
+		total += c.second;
 	}
 	double bits = 0.0;
 	for (auto c : counts) {
-		bits += c.second * -std::log2(double(c.second) / data.size());
+		bits += c.second * -std::log2(double(c.second) / total);
 	}
 	return bits;
 }
 
-double est_bits(std::vector< uint32_t > const &data) {
-	return est_bits_helper(data);
+double est_bits_helper(std::vector< int32_t > const &values) {
+	std::map< int32_t, uint32_t > counts;
+	for (auto v : values) {
+		counts.insert(std::make_pair(v, 0)).first->second += 1;
+	}
+	return est_bits_helper(counts);
 }
 
+/*
 double est_bits_delta(std::vector< uint32_t > const &data) {
 	if (data.empty()) return 0.0;
 
@@ -168,25 +186,117 @@ double est_bits_delta(std::vector< uint32_t > const &data) {
 
 	return est_bits_helper(deltas);
 }
+*/
 
-void report(const char *name, std::vector< uint32_t > const &data) {
-	std::map< uint32_t, uint32_t > counts;
+double est_bits_split(std::vector< const char * > features, std::vector< std::pair< Context, int32_t > > const &data, Params const &params, std::string &desc) {
+	std::map< int32_t, uint32_t > counts;
 	for (auto d : data) {
-		counts.insert(std::make_pair(d, 0)).first->second += 1;
+		counts.insert(std::make_pair(d.second, 0)).first->second += 1;
 	}
-	printf("%-20s : %5d items, %4d unique -> %5.0f [%5.0f] bytes (%5.2f [%5.2f] bits per)\n",
-		name,
-		(int)data.size(),
-		(int)counts.size(),
-		std::ceil(est_bits(data) / 8.0),
-		std::ceil(est_bits_delta(data) / 8.0),
-		est_bits(data) / data.size(),
-		est_bits_delta(data) / data.size()
-		);
+	double basic_bits = est_bits_helper(counts);
+	if (params.verbose_split) {
+		printf("  %6.0f bytes w/ no split\n", std::ceil(basic_bits / 8.0));
+	}
+
+	double best_bits = basic_bits;
+	desc = "-";
+
+	if (params.split == Params::NoSplit) {
+		return best_bits;
+	}
+
+	//estimate entropy storage given split along each feature
+	for (auto feature : features) {
+		std::map< int32_t, std::map< int32_t, uint32_t > > bins;
+		for (auto const &d : data) {
+			auto f = d.first.find(feature);
+			assert(f != d.first.end());
+			bins[f->second].insert(std::make_pair(d.second, 0)).first->second += 1;
+		}
+		assert(!bins.empty());
+		double bits = 16.0 + 16.0; //charging for first value + bin count
+		int32_t prev = bins.begin()->first;
+		std::vector< int32_t > bin_deltas;
+		for (auto &bin : bins) {
+			bits += est_bits_helper(bin.second);
+			bin_deltas.push_back(bin.first - prev);
+			prev = bin.first;
+		}
+		double label_bits = est_bits_helper(bin_deltas);
+		if (params.verbose_split) {
+			printf("  % 6.0f saved [inc %2.0f label] w/ %s\n",
+				std::floor((basic_bits - bits + label_bits) / 8.0),
+				std::ceil(label_bits / 8.0),
+				feature);
+		}
+		bits += label_bits;
+		if (bits < best_bits) {
+			best_bits = bits;
+			desc = feature;
+		}
+/*
+		//TODO: recursive splitting
+		if (bins.size() > 1) {
+			std::string rec_desc = "";
+			double rec_bits = est_bits_split(features, data, params, rec_desc);
+			rec_desc = feature + std::string("|") + rec_desc;
+			rec_bits += label_bits;
+			printf("  % 6.0f saved [inc %2.0f label] w/ %s\n",
+				std::floor((basic_bits - rec_bits + label_bits) / 8.0),
+				std::ceil(label_bits / 8.0),
+				rec_desc(std::string("|" + feature));
+			if (rec_bits
+		}
+*/
+	}
+	return best_bits;
+}
+
+double report(const char *name, std::vector< std::pair< Context, int32_t > > const &data, Params const &params) {
+	if (data.empty()) {
+		if (params.verbose) {
+			printf("%-20s : empty.\n", name);
+		}
+		return 0.0;
+	}
+
+	std::set< const char * > features;
+	for (auto f : data[0].first) {
+		features.insert(f.first);
+	}
+
+	double best_bits = std::numeric_limits< double >::infinity();
+	std::string best_desc = "";
+	best_bits = est_bits_split(std::vector< const char * >(features.begin(), features.end()), data, params, best_desc);
+
+
+
+	/*double bits = est_bits(data);
+	double delta_bits = est_bits_delta(data);*/
+
+
+	std::set< int32_t > unique;
+	for (auto d : data) {
+		unique.insert(d.second);
+	}
+
+	if (params.verbose) {
+		printf("%-20s : %5d items, %4d unique -> %5.0f bytes (%5.2f bits per) via %s\n",
+			name,
+			(int)data.size(),
+			(int)unique.size(),
+			std::ceil(best_bits / 8.0),
+			best_bits / data.size(),
+			best_desc.c_str()
+			);
+	}
+
+#ifdef EXACT
 	Coder init, equal, adapt;
 	{
 		std::map< int32_t, uint32_t > fixed(counts.begin(), counts.end());
 		Distribution dist(fixed);
+		std::cout << "f"; std::cout.flush();
 		for (auto d : data) {
 			init.write(d, dist);
 		}
@@ -197,20 +307,22 @@ void report(const char *name, std::vector< uint32_t > const &data) {
 			b.second = 1;
 		}
 		Distribution dist(blank);
+		std::cout << "e"; std::cout.flush();
 		for (auto d : data) {
 			equal.write(d, dist);
 		}
+		std::cout << "a"; std::cout.flush();
 		for (auto d : data) {
 			adapt.write(d, dist);
 			dist.update_for_val(d);
 		}
 	}
 	printf("   init: %d, equal: %d, adapt: %d\n", (int)init.output.size(), (int)equal.output.size(), (int)adapt.output.size());
-
+#endif //EXACT
+	return best_bits;
 }
 
-
-#define REPORT(V) report(#V, V)
+#define REPORT(V) report(#V, V, params)
 
 void compress(std::vector< std::string > const &_wordlist, Params const &params) {
 	std::vector< std::string > wordlist = _wordlist;
@@ -220,17 +332,17 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 	if (false) {
 		//depluralizin'
 		//ends up costing bytes because of s_bits storage
-		std::vector< uint32_t > s_bits;
+		std::vector< std::pair< Context, int32_t > > s_bits;
 		for (uint32_t i = 0; i + 1 < wordlist.size(); /* later */) {
 			if (wordlist[i] + "s" == wordlist[i+1]) {
-				s_bits.push_back(1);
+				s_bits.emplace_back(Context(), 1);
 				wordlist.erase(wordlist.begin() + i + 1);
 			} else {
-				s_bits.push_back(0);
+				s_bits.emplace_back(Context(), 0);
 				++i;
 			}
 		}
-		report("s_bits", s_bits);
+		REPORT(s_bits);
 	}
 
 	if (false) {
@@ -274,10 +386,10 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 			return a.substr(a.size()-1) < b.substr(b.size()-1);
 		});
 
-		std::vector< uint32_t > s_stem;
+		std::vector< std::pair< Context, int32_t > > s_stem;
 
 		for (auto w : wordlist) {
-			s_stem.push_back(stems.count(w));
+			s_stem.emplace_back(Context(), stems.count(w));
 		}
 
 		REPORT(s_stem);
@@ -287,7 +399,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		s_stem.clear();
 
 		for (auto w : wordlist) {
-			s_stem.push_back(stems.count(w));
+			s_stem.emplace_back(Context(), stems.count(w));
 		}
 
 		REPORT(s_stem);
@@ -403,25 +515,20 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		assert(params.re_id == Params::None);
 	}
 
-	std::vector< uint32_t > s_letters;
-	std::vector< uint32_t > s_terminals;
-	std::vector< uint32_t > s_child_counts;
-	std::vector< uint32_t > s_child_counts_t;
-	std::vector< uint32_t > s_first_letters;
-	std::vector< uint32_t > s_first_letters_t;
-	std::vector< uint32_t > s_letter_deltas;
-	std::vector< uint32_t > s_letter_deltas_t;
-	std::vector< uint32_t > s_id_counts;
-	std::vector< uint32_t > s_id_counts_t;
-	std::vector< uint32_t > s_first_ids;
-	std::vector< uint32_t > s_first_ids_t;
-	std::vector< uint32_t > s_id_deltas;
-	std::vector< uint32_t > s_id_deltas_t;
-
+	std::vector< std::pair< Context, int32_t > > s_letters;
+	std::vector< std::pair< Context, int32_t > > s_terminals;
+	std::vector< std::pair< Context, int32_t > > s_child_counts;
+	std::vector< std::pair< Context, int32_t > > s_first_letters;
+	std::vector< std::pair< Context, int32_t > > s_letter_deltas;
+	std::vector< std::pair< Context, int32_t > > s_id_counts;
+	std::vector< std::pair< Context, int32_t > > s_first_ids;
+	std::vector< std::pair< Context, int32_t > > s_id_deltas;
 
 
 	{ //store tree in fragments by refs
-		std::vector< uint32_t > size_hist;
+		std::map< uint32_t, uint32_t > size_hist;
+		std::map< uint32_t, uint32_t > refs_hist;
+		std::map< uint32_t, uint32_t > ids_hist;
 
 		//let's store by (descending) id:
 		std::vector< std::pair< uint32_t, Node * > > by_id;
@@ -436,12 +543,16 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 			if (seed->refs == 0) {
 				//don't store letter for root
 				assert(seed->src == '\0');
+
 			} else {
 				assert(seed->src != '\0');
-				s_letters.push_back(seed->src);
+				s_letters.emplace_back(Context(), seed->src);
+
+				continue; //TEST: actually, only store root fragment
 			}
 
 			uint32_t fragment_size = 0;
+			std::set< uint32_t > fragment_refs;
 
 			std::deque< Node * > todo;
 			todo.push_back(seed);
@@ -461,6 +572,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 					} else {
 						//will be stored by reference
 						ids.push_back(cn.second->id);
+						fragment_refs.insert(cn.second->id);
 					}
 				}
 				//store ids in order:
@@ -468,104 +580,82 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 				//store children in order as well (should already be sorted -- map):
 				std::sort(children.begin(), children.end());
 
+				Context context;
+				context("letter", n->src);
+				s_terminals.emplace_back(context, n->terminal ? 1 : 0);
+				context("terminal", n->terminal ? 1 : 0);
+
+				s_child_counts.emplace_back(context, children.size());
+				context("#children", children.size());
+				s_id_counts.emplace_back(context, ids.size());
+				context("#ids", ids.size());
+
+
 				if (!children.empty()) { //children
-					if (n->terminal) {
-						s_first_letters_t.push_back(children[0].first);
-					} else {
-						s_first_letters.push_back(children[0].first);
-					}
+					s_first_letters.emplace_back(context, children[0].first);
 					for (uint32_t i = 1; i < children.size(); ++i) {
-						if (n->terminal) {
-							s_letter_deltas_t.push_back(children[i].first - children[i-1].first);
-						} else {
-							s_letter_deltas.push_back(children[i].first - children[i-1].first);
-						}
+						s_letter_deltas.emplace_back(context, children[i].first - children[i-1].first);
 					}
 				}
 				if (!ids.empty()) {
-					if (n->terminal) {
-						s_first_ids_t.push_back(ids[0]);
-					} else {
-						s_first_ids.push_back(ids[0]);
-					}
+					s_first_ids.emplace_back(context, ids[0]);
 					for (uint32_t i = 1; i < ids.size(); ++i) {
-						if (n->terminal) {
-							s_id_deltas_t.push_back(ids[i] - ids[i-1]);
-						} else {
-							s_id_deltas.push_back(ids[i] - ids[i-1]);
-						}
+						s_id_deltas.emplace_back(context, ids[i] - ids[i-1]);
 					}
 				}
 
-				/*if (children.empty() && ids.empty()) {
-					assert(n->terminal);
-					s_child_counts_t.push_back(children.size());
-					s_id_counts_t.push_back(ids.size());
-				} else {*/
-					s_terminals.push_back(n->terminal ? 1 : 0);
-					if (n->terminal) {
-						s_child_counts_t.push_back(children.size());
-						s_id_counts_t.push_back(ids.size());
-					} else {
-						s_child_counts.push_back(children.size());
-						s_id_counts.push_back(ids.size());
-					}
-				//}
+				ids_hist.insert(std::make_pair(ids.size(), 0)).first->second += 1;
 
 				for (auto c : children) {
 					todo.push_back(c.second);
 				}
 			}
 
-			while (fragment_size >= size_hist.size()) {
-				size_hist.push_back(0);
-			}
-			size_hist[fragment_size] += 1;
+			size_hist.insert(std::make_pair(fragment_size, 0)).first->second += 1;
+			refs_hist.insert(std::make_pair(fragment_refs.size(), 0)).first->second += 1;
 		}
 
 
 		if (params.verbose) {
-			for (uint32_t i = 0; i < size_hist.size(); ++i) {
-				if (size_hist[i] != 0) {
-					std::cout << "|" << i << "| " << size_hist[i] << std::endl;
-				}
+			for (auto h : size_hist) {
+				std::cout << "|" << h.first << "| " << h.second << std::endl;
 			}
+			for (auto h : refs_hist) {
+				std::cout << "refs(" << h.first << ") " << h.second << std::endl;
+			}
+			for (auto h : ids_hist) {
+				std::cout << "ids(" << h.first << ") " << h.second << std::endl;
+			}
+
+
 		}
 
 	}
 
-	if (params.verbose) {
-		REPORT(s_letters);
-		REPORT(s_terminals);
-		REPORT(s_child_counts);
-		REPORT(s_child_counts_t);
-		REPORT(s_first_letters);
-		REPORT(s_first_letters_t);
-		REPORT(s_letter_deltas);
-		REPORT(s_letter_deltas_t);
-		REPORT(s_id_counts);
-		REPORT(s_id_counts_t);
-		REPORT(s_first_ids);
-		REPORT(s_first_ids_t);
-		REPORT(s_id_deltas);
-		REPORT(s_id_deltas_t);
+
+/*
+	//HACK: simulate "best possible delta compression":
+	if (!s_first_ids.empty()) {
+		std::sort(s_first_ids.begin(), s_first_ids.end(), [](std::pair< Context, int32_t > const &a, std::pair< Context, int32_t > const &b) {
+			return a.second < b.second;
+		});
+		for (uint32_t i = s_first_ids.size() - 2; i < s_first_ids.size(); --i) {
+			s_first_ids[i+1].second -= s_first_ids[i].second;
+		}
+		s_first_ids[0].second = 0;
 	}
-#undef REPORT
-	double bits =
-		std::min(est_bits(s_letters), est_bits_delta(s_letters))
-		+ est_bits(s_terminals)
-		+ est_bits(s_child_counts)
-		+ est_bits(s_child_counts_t)
-		+ est_bits(s_first_letters)
-		+ est_bits(s_first_letters_t)
-		+ est_bits(s_letter_deltas)
-		+ est_bits(s_letter_deltas_t)
-		+ est_bits(s_id_counts)
-		+ est_bits(s_id_counts_t)
-		+ est_bits(s_first_ids)
-		+ est_bits(s_first_ids_t)
-		+ est_bits(s_id_deltas)
-		+ est_bits(s_id_deltas_t);
+*/
+
+
+	double bits = 
+		REPORT(s_letters)
+		+ REPORT(s_terminals)
+		+ REPORT(s_child_counts)
+		+ REPORT(s_first_letters)
+		+ REPORT(s_letter_deltas)
+		+ REPORT(s_id_counts)
+		+ REPORT(s_first_ids)
+		+ REPORT(s_id_deltas);
 	std::cout << "[" << params.describe() << "] " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 }
 
@@ -593,9 +683,11 @@ int main(int argc, char **argv) {
 	params.re_id = Params::RefCount;
 	params.inline_single = false;
 	params.reverse = false;
+	params.split = Params::SingleSplit;
 	compress(wordlist, params);
 #else
 	params.verbose = false;
+	params.split = Params::SingleSplit;
 
 	for (int letter_map = 0; letter_map < Params::MapCount; ++letter_map)
 	for (int re_id = 0; re_id < Params::IdCount; ++re_id)
