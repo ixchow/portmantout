@@ -93,9 +93,10 @@ void Node::dagify_children(Unique &u) {
 
 class Params {
 public:
-	Params() : verbose(false), verbose_split(false), letter_map(NoMap), re_id(None), split(NoSplit), inline_single(false), reverse(false) { }
+	Params() : verbose(false), verbose_split(false), only_root(false), letter_map(NoMap), re_id(None), split(NoSplit), inline_single(false), reverse(false) { }
 	bool verbose;
 	bool verbose_split;
+	bool only_root;
 	enum LetterMap : int {
 		NoMap,
 		ByFrequency,
@@ -143,6 +144,9 @@ public:
 			desc += "~";
 		} else {
 			desc += "-";
+		}
+		if (only_root) {
+			desc += "!root!";
 		}
 		return desc;
 	}
@@ -515,20 +519,55 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		assert(params.re_id == Params::None);
 	}
 
+	{ //re-id by trying to minimize refs storage:
+		std::vector< std::vector< int32_t > > refs;
+
+		{ //build list of references:
+			std::deque< Node * > todo;
+			todo.push_back(&root);
+			while (!todo.empty()) {
+				Node *n = todo.front();
+				todo.pop_front();
+
+				refs.emplace_back();
+
+				for (auto cn : *n) {
+					if (cn.second->refs == 1 || (params.inline_single && cn.second->size() == 0)) {
+						//will be stored inline
+						todo.emplace_back(cn.second);
+					} else {
+						//will be stored by reference
+						refs.back().push_back(cn.second->id);
+					}
+				}
+				std::sort(refs.back().begin(), refs.back().end());
+
+				if (refs.back().empty()) {
+					refs.pop_back();
+				}
+			}
+		}
+
+	}
+
 	std::vector< std::pair< Context, int32_t > > s_letters;
 	std::vector< std::pair< Context, int32_t > > s_terminals;
 	std::vector< std::pair< Context, int32_t > > s_child_counts;
+	std::vector< std::pair< Context, int32_t > > s_all_letters;
 	std::vector< std::pair< Context, int32_t > > s_first_letters;
 	std::vector< std::pair< Context, int32_t > > s_letter_deltas;
 	std::vector< std::pair< Context, int32_t > > s_id_counts;
 	std::vector< std::pair< Context, int32_t > > s_first_ids;
+	std::vector< std::pair< Context, int32_t > > s_second_ids;
+	std::vector< std::pair< Context, int32_t > > s_third_ids;
 	std::vector< std::pair< Context, int32_t > > s_id_deltas;
+	std::vector< std::pair< Context, int32_t > > s_ids;
 
 
 	{ //store tree in fragments by refs
-		std::map< uint32_t, uint32_t > size_hist;
+
+		std::map< uint32_t, uint32_t > id_refs;
 		std::map< uint32_t, uint32_t > refs_hist;
-		std::map< uint32_t, uint32_t > ids_hist;
 
 		//let's store by (descending) id:
 		std::vector< std::pair< uint32_t, Node * > > by_id;
@@ -548,11 +587,12 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 				assert(seed->src != '\0');
 				s_letters.emplace_back(Context(), seed->src);
 
-				continue; //TEST: actually, only store root fragment
+				if (params.only_root) {
+					continue;
+				}
 			}
 
 			uint32_t fragment_size = 0;
-			std::set< uint32_t > fragment_refs;
 
 			std::deque< Node * > todo;
 			todo.push_back(seed);
@@ -572,13 +612,22 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 					} else {
 						//will be stored by reference
 						ids.push_back(cn.second->id);
-						fragment_refs.insert(cn.second->id);
+						id_refs.insert(std::make_pair(cn.second->id, 0)).first->second += 1;
 					}
 				}
 				//store ids in order:
 				std::sort(ids.begin(), ids.end());
 				//store children in order as well (should already be sorted -- map):
 				std::sort(children.begin(), children.end());
+
+			/*
+				//HACK: randomize to see how bad this might be:
+				for (uint32_t i = 0; i < children.size(); ++i) {
+					std::swap(children[i], children[i + (rand() % (children.size() - i))]);
+				}
+			*/
+
+				refs_hist.insert(std::make_pair(ids.size(), 0)).first->second += 1;
 
 				Context context;
 				context("letter", n->src);
@@ -592,41 +641,44 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 
 
 				if (!children.empty()) { //children
+					for (auto c : children) {
+						s_all_letters.emplace_back(context, c.first);
+					}
 					s_first_letters.emplace_back(context, children[0].first);
 					for (uint32_t i = 1; i < children.size(); ++i) {
 						s_letter_deltas.emplace_back(context, children[i].first - children[i-1].first);
 					}
 				}
 				if (!ids.empty()) {
+					for (auto id : ids) {
+						s_ids.emplace_back(context, id);
+					}
 					s_first_ids.emplace_back(context, ids[0]);
 					for (uint32_t i = 1; i < ids.size(); ++i) {
 						s_id_deltas.emplace_back(context, ids[i] - ids[i-1]);
 					}
 				}
 
-				ids_hist.insert(std::make_pair(ids.size(), 0)).first->second += 1;
-
 				for (auto c : children) {
 					todo.push_back(c.second);
 				}
 			}
 
-			size_hist.insert(std::make_pair(fragment_size, 0)).first->second += 1;
-			refs_hist.insert(std::make_pair(fragment_refs.size(), 0)).first->second += 1;
 		}
 
 
 		if (params.verbose) {
-			for (auto h : size_hist) {
-				std::cout << "|" << h.first << "| " << h.second << std::endl;
-			}
 			for (auto h : refs_hist) {
-				std::cout << "refs(" << h.first << ") " << h.second << std::endl;
-			}
-			for (auto h : ids_hist) {
-				std::cout << "ids(" << h.first << ") " << h.second << std::endl;
+				std::cout << h.first << " refs: " << h.second << std::endl;
 			}
 
+			std::map< uint32_t, uint32_t > uses_hist;
+			for (auto r : id_refs) {
+				uses_hist.insert(std::make_pair(r.second, 0)).first->second += 1;
+			}
+			for (auto h : uses_hist) {
+				std::cout << h.first << " uses: " << h.second << std::endl;
+			}
 
 		}
 
@@ -645,6 +697,20 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		s_first_ids[0].second = 0;
 	}
 */
+	std::cout << "-------" << std::endl;
+	REPORT(s_ids);
+
+	std::cout << "   vs  " << std::endl;
+	REPORT(s_first_ids);
+	REPORT(s_id_deltas);
+
+	std::cout << "-------" << std::endl;
+	REPORT(s_all_letters);
+
+	std::cout << "   vs  " << std::endl;
+	REPORT(s_first_letters);
+	REPORT(s_letter_deltas);
+	std::cout << "-------" << std::endl;
 
 
 	double bits = 
@@ -654,9 +720,12 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		+ REPORT(s_first_letters)
 		+ REPORT(s_letter_deltas)
 		+ REPORT(s_id_counts)
+		//+ REPORT(s_ids)
 		+ REPORT(s_first_ids)
-		+ REPORT(s_id_deltas);
+		+ REPORT(s_id_deltas)
+	;
 	std::cout << "[" << params.describe() << "] " << std::ceil(bits / 8.0) << " bytes." << std::endl;
+
 }
 
 
@@ -684,6 +753,7 @@ int main(int argc, char **argv) {
 	params.inline_single = false;
 	params.reverse = false;
 	params.split = Params::SingleSplit;
+	params.only_root = false;
 	compress(wordlist, params);
 #else
 	params.verbose = false;
