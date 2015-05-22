@@ -93,7 +93,7 @@ void Node::dagify_children(Unique &u) {
 
 class Params {
 public:
-	Params() : verbose(false), verbose_split(false), only_root(false), letter_map(NoMap), re_id(None), split(NoSplit), inline_single(false), reverse(false) { }
+	Params() : verbose(false), verbose_split(false), only_root(false), letter_map(NoMap), re_id(None), split(NoSplit), inline_single(false), reverse(false), core_start(0), core_length(-1U) { }
 	bool verbose;
 	bool verbose_split;
 	bool only_root;
@@ -115,6 +115,8 @@ public:
 	} split;
 	bool inline_single;
 	bool reverse;
+	uint32_t core_start;
+	uint32_t core_length;
 	std::string describe() const {
 		std::string desc = "";
 		if (letter_map == NoMap) {
@@ -147,6 +149,9 @@ public:
 		}
 		if (only_root) {
 			desc += "!root!";
+		}
+		if (core_start != 0 || core_length != -1U) {
+			desc += "core" + std::to_string(core_start) + "+" + std::to_string(core_length);
 		}
 		return desc;
 	}
@@ -333,6 +338,9 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 
 	std::sort(wordlist.begin(), wordlist.end());
 
+
+
+
 	if (false) {
 		//depluralizin'
 		//ends up costing bytes because of s_bits storage
@@ -444,6 +452,133 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 				c = reorder[c];
 			}
 		}
+	}
+
+
+	double d_bits = 0;
+	if (true) {
+		std::cout << "Avoiding tree methods." << std::endl;
+		/*
+		std::vector< std::pair< Context, int32_t > > a_letters_newlines;
+		std::vector< std::pair< Context, int32_t > > b_lengths;
+		std::vector< std::pair< Context, int32_t > > b_letters;
+		std::vector< std::vector< std::pair< Context, int32_t > > > c_columns;
+		for (auto w : wordlist) {
+			{ // ----------- method a, just run-length encode -----------
+				char prev = '\0';
+				char prev2 = '\0';
+				for (uint32_t i = 0; i < w.size(); ++i) {
+					Context context;
+					context("[-1]", prev);
+					context("[-2:-1]", int(prev2) * 256 + prev);
+					a_letters_newlines.emplace_back(context, w[i]);
+					prev2 = prev;
+					prev = w[i];
+				}
+				{ //newline:
+					Context context;
+					context("[-1]", prev);
+					context("[-2:-1]", int(prev2) * 256 + prev);
+					a_letters_newlines.emplace_back(context, '\0');
+				}
+			}
+
+			// ----------- method b, use lengths -------------
+			{
+				{
+					Context context;
+					context("first", w[0]);
+					b_lengths.emplace_back(context, w.size());
+				}
+				char prev = '\0';
+				char prev2 = '\0';
+				for (uint32_t i = 0; i < w.size(); ++i) {
+					Context context;
+					context("[-1]", prev);
+					context("[-2:-1]", int(prev2) * 256 + prev);
+					b_letters.emplace_back(context, w[i]);
+					prev2 = prev;
+					prev = w[i];
+				}
+			}
+
+			// ----------- method c, use columns -------------
+			for (uint32_t i = 0; i < w.size(); ++i) {
+				if (i == c_columns.size()) c_columns.emplace_back();
+				c_columns[i].emplace_back(Context(), w[i]);
+			}
+		}
+		double a_bits = REPORT(a_letters_newlines);
+		std::cout << "[a] " << std::ceil(a_bits / 8.0) << " bytes." << std::endl;
+		double b_bits =
+			REPORT(b_lengths)
+			+ REPORT(b_letters);
+		std::cout << "[b] " << std::ceil(b_bits / 8.0) << " bytes." << std::endl;
+
+		double c_bits = 0;
+		for (auto &c_col : c_columns) {
+			c_bits += REPORT(c_col);
+		}
+		std::cout << "[c] " << std::ceil(c_bits / 8.0) << " bytes." << std::endl;
+		*/
+		for (uint32_t pos = 0; true; ++pos) {
+			if (pos > 0) {
+				auto comp = [pos](std::string const &a, std::string const &b) -> bool {
+					if (pos < a.size() && pos < b.size()) {
+						return a[pos-1] < b[pos-1];
+					} else if (pos < a.size()) {
+						return true;
+					} else if (pos < b.size()) {
+						return false;
+					} else {
+						assert(pos >= a.size() && pos >= b.size());
+						return a < b;
+					}
+				};
+				std::sort(wordlist.begin(), wordlist.end(), comp);
+			}
+			std::vector< std::pair< Context, int32_t > > d_col;
+			char prev = 'a';
+			bool too_long = false;
+			for (auto const &w : wordlist) {
+				//std::cout << w << "\n";
+				if (pos >= w.size()) {
+					too_long = true;
+				} else {
+					assert(!too_long);
+					Context context;
+					if (pos > 0) {
+						context("prev", w[pos-1]);
+					}
+					d_col.emplace_back(context, w[pos] - prev);
+					prev = w[pos];
+				}
+			}
+			if (d_col.empty()) break;
+			if (pos < params.core_start || pos >= params.core_start + params.core_length) {
+				std::cout << pos; std::cout.flush();
+				d_bits += REPORT(d_col);
+			}
+		}
+		std::cout << "[d] " << std::ceil(d_bits / 8.0) << " bytes." << std::endl;
+	}
+
+	{
+		//trim to just the "core" of the words (?)
+		for (auto &w : wordlist) {
+			if (w.size() < params.core_start) {
+				w = "";
+			} else {
+				w = w.substr(params.core_start, params.core_length);
+			}
+		}
+		std::sort(wordlist.begin(), wordlist.end());
+		while (wordlist[0] == "") {
+			wordlist.erase(wordlist.begin());
+		}
+		auto end = std::unique(wordlist.begin(), wordlist.end());
+		wordlist.erase(end, wordlist.end());
+		std::cout << "TRIMMED to core of " << wordlist.size() << " words." << std::endl;
 	}
 
 	/*
@@ -724,6 +859,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		+ REPORT(s_first_ids)
 		+ REPORT(s_id_deltas)
 	;
+	bits += d_bits;
 	std::cout << "[" << params.describe() << "] " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 
 }
@@ -754,6 +890,8 @@ int main(int argc, char **argv) {
 	params.reverse = false;
 	params.split = Params::SingleSplit;
 	params.only_root = false;
+	params.core_start = 0;
+	params.core_length = -1U;
 	compress(wordlist, params);
 #else
 	params.verbose = false;
