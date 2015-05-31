@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cmath>
 #include <random>
+#include <unordered_set>
+#include <list>
 
 #include "Coder.hpp"
 
@@ -93,7 +95,7 @@ void Node::dagify_children(Unique &u) {
 
 class Params {
 public:
-	Params() : verbose(false), verbose_split(false), only_root(false), letter_map(NoMap), re_id(None), split(NoSplit), inline_single(false), reverse(false), core_start(0), core_length(-1U) { }
+	Params() : verbose(false), verbose_split(false), only_root(false), letter_map(NoMap), re_id(None), split(NoSplit), reverse(false)  { }
 	bool verbose;
 	bool verbose_split;
 	bool only_root;
@@ -113,10 +115,7 @@ public:
 		SingleSplit,
 		SplitCount
 	} split;
-	bool inline_single;
 	bool reverse;
-	uint32_t core_start;
-	uint32_t core_length;
 	std::string describe() const {
 		std::string desc = "";
 		if (letter_map == NoMap) {
@@ -137,11 +136,6 @@ public:
 			assert(0 && "Unknown re-id mode.");
 		}
 
-		if (inline_single) {
-			desc += "i";
-		} else {
-			desc += "-";
-		}
 		if (reverse) {
 			desc += "~";
 		} else {
@@ -149,9 +143,6 @@ public:
 		}
 		if (only_root) {
 			desc += "!root!";
-		}
-		if (core_start != 0 || core_length != -1U) {
-			desc += "core" + std::to_string(core_start) + "+" + std::to_string(core_length);
 		}
 		return desc;
 	}
@@ -333,6 +324,126 @@ double report(const char *name, std::vector< std::pair< Context, int32_t > > con
 
 #define REPORT(V) report(#V, V, params)
 
+class PlyData {
+public:
+	PlyData(PlyData *_previous, Node *_node) : previous(_previous), node(_node) {
+		//compute everything we might care to store about this node:
+
+		child_count = 0;
+		letter = node->src;
+		terminal = node->terminal;
+
+		for (auto cn : *node) {
+			assert(cn.second->refs >= 1);
+			//store refs == 1 nodes or nodes with no children inline:
+			if (cn.second->refs == 1) {
+				++child_count;
+			} else {
+				ids.push_back(cn.second->id);
+			}
+		}
+
+		std::sort(ids.begin(), ids.end());
+
+		//what if we delta these a bit... (?)
+		for (uint32_t i = ids.size() - 1; i - 1 < ids.size(); --i) {
+			ids[i] = ids[i] - ids[i-1];
+		}
+	}
+
+	PlyData *previous;
+	Node *node; //for sanity checking and child-finding; all relevant data is extracted from node during construction.
+
+	std::vector< uint32_t > ids; //node: id_count is also a feature.
+	uint8_t child_count;
+	char letter;
+	bool terminal;
+
+};
+
+class Ply {
+public:
+	Ply(Node *root) : previous(NULL) {
+		first_feature = 0;
+		data.emplace_back((PlyData *)NULL, root);
+
+		setup_from_data();
+	}
+	Ply(Ply *_previous) : previous(_previous) {
+		assert(previous);
+		first_feature = previous->first_feature + previous->feature_count;
+
+		//add a data entry for every child implied by previous ply:
+		for (auto &d : previous->data) {
+			for (auto cn : *d.node) {
+				assert(cn.second->refs >= 1);
+				//recurse to nodes with refs == 1:
+				if (cn.second->refs == 1) {
+					assert(cn.first == cn.second->src);
+					data.emplace_back(&d, cn.second);
+				}
+			}
+		}
+
+		setup_from_data();
+	}
+
+	void setup_from_data() {
+
+		feature_count = 0;
+		for (auto &d : data) {
+			feature_count = std::max< uint32_t >(feature_count,
+				  1 //letter
+				+ 1 //child count
+				+ 1 //ids count
+				+ 1 //terminal
+				+ d.ids.size() //ids themselves
+			);
+		}
+	}
+
+	enum : uint32_t {
+		Letter = 0,
+		ChildCount = 1,
+		IdCount = 2,
+		Terminal = 3,
+		FirstId = 4,
+	};
+
+	Ply *previous;
+
+	std::vector< PlyData > data;
+	uint32_t first_feature;
+	uint32_t feature_count;
+
+	int32_t get_feature(uint32_t index, uint32_t feature) {
+		assert(feature < first_feature + feature_count);
+		assert(index < data.size());
+		PlyData &d = data[index];
+		if (feature < first_feature) {
+			assert(previous);
+			return previous->get_feature(d.previous - &(previous->data[0]), feature);
+		} else {
+			if (feature - first_feature == Letter) {
+				return d.letter;
+			} else if (feature - first_feature == ChildCount) {
+				return d.child_count;
+			} else if (feature - first_feature == IdCount) {
+				return d.ids.size();
+			} else if (feature - first_feature == Terminal) {
+				return d.terminal;
+			} else { assert(feature - first_feature >= FirstId);
+				uint32_t i = feature - first_feature - FirstId;
+				if (i < d.ids.size()) {
+					return d.ids[i];
+				} else {
+					return 0;
+				}
+			}
+		}
+	}
+};
+
 void compress(std::vector< std::string > const &_wordlist, Params const &params) {
 	std::vector< std::string > wordlist = _wordlist;
 
@@ -454,133 +565,6 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		}
 	}
 
-
-	double d_bits = 0;
-	if (true) {
-		std::cout << "Avoiding tree methods." << std::endl;
-		/*
-		std::vector< std::pair< Context, int32_t > > a_letters_newlines;
-		std::vector< std::pair< Context, int32_t > > b_lengths;
-		std::vector< std::pair< Context, int32_t > > b_letters;
-		std::vector< std::vector< std::pair< Context, int32_t > > > c_columns;
-		for (auto w : wordlist) {
-			{ // ----------- method a, just run-length encode -----------
-				char prev = '\0';
-				char prev2 = '\0';
-				for (uint32_t i = 0; i < w.size(); ++i) {
-					Context context;
-					context("[-1]", prev);
-					context("[-2:-1]", int(prev2) * 256 + prev);
-					a_letters_newlines.emplace_back(context, w[i]);
-					prev2 = prev;
-					prev = w[i];
-				}
-				{ //newline:
-					Context context;
-					context("[-1]", prev);
-					context("[-2:-1]", int(prev2) * 256 + prev);
-					a_letters_newlines.emplace_back(context, '\0');
-				}
-			}
-
-			// ----------- method b, use lengths -------------
-			{
-				{
-					Context context;
-					context("first", w[0]);
-					b_lengths.emplace_back(context, w.size());
-				}
-				char prev = '\0';
-				char prev2 = '\0';
-				for (uint32_t i = 0; i < w.size(); ++i) {
-					Context context;
-					context("[-1]", prev);
-					context("[-2:-1]", int(prev2) * 256 + prev);
-					b_letters.emplace_back(context, w[i]);
-					prev2 = prev;
-					prev = w[i];
-				}
-			}
-
-			// ----------- method c, use columns -------------
-			for (uint32_t i = 0; i < w.size(); ++i) {
-				if (i == c_columns.size()) c_columns.emplace_back();
-				c_columns[i].emplace_back(Context(), w[i]);
-			}
-		}
-		double a_bits = REPORT(a_letters_newlines);
-		std::cout << "[a] " << std::ceil(a_bits / 8.0) << " bytes." << std::endl;
-		double b_bits =
-			REPORT(b_lengths)
-			+ REPORT(b_letters);
-		std::cout << "[b] " << std::ceil(b_bits / 8.0) << " bytes." << std::endl;
-
-		double c_bits = 0;
-		for (auto &c_col : c_columns) {
-			c_bits += REPORT(c_col);
-		}
-		std::cout << "[c] " << std::ceil(c_bits / 8.0) << " bytes." << std::endl;
-		*/
-		for (uint32_t pos = 0; true; ++pos) {
-			if (pos > 0) {
-				auto comp = [pos](std::string const &a, std::string const &b) -> bool {
-					if (pos < a.size() && pos < b.size()) {
-						return a[pos-1] < b[pos-1];
-					} else if (pos < a.size()) {
-						return true;
-					} else if (pos < b.size()) {
-						return false;
-					} else {
-						assert(pos >= a.size() && pos >= b.size());
-						return a < b;
-					}
-				};
-				std::sort(wordlist.begin(), wordlist.end(), comp);
-			}
-			std::vector< std::pair< Context, int32_t > > d_col;
-			char prev = 'a';
-			bool too_long = false;
-			for (auto const &w : wordlist) {
-				//std::cout << w << "\n";
-				if (pos >= w.size()) {
-					too_long = true;
-				} else {
-					assert(!too_long);
-					Context context;
-					if (pos > 0) {
-						context("prev", w[pos-1]);
-					}
-					d_col.emplace_back(context, w[pos] - prev);
-					prev = w[pos];
-				}
-			}
-			if (d_col.empty()) break;
-			if (pos < params.core_start || pos >= params.core_start + params.core_length) {
-				std::cout << pos; std::cout.flush();
-				d_bits += REPORT(d_col);
-			}
-		}
-		std::cout << "[d] " << std::ceil(d_bits / 8.0) << " bytes." << std::endl;
-	}
-
-	{
-		//trim to just the "core" of the words (?)
-		for (auto &w : wordlist) {
-			if (w.size() < params.core_start) {
-				w = "";
-			} else {
-				w = w.substr(params.core_start, params.core_length);
-			}
-		}
-		std::sort(wordlist.begin(), wordlist.end());
-		while (wordlist[0] == "") {
-			wordlist.erase(wordlist.begin());
-		}
-		auto end = std::unique(wordlist.begin(), wordlist.end());
-		wordlist.erase(end, wordlist.end());
-		std::cout << "TRIMMED to core of " << wordlist.size() << " words." << std::endl;
-	}
-
 	/*
 	std::sort(wordlist.begin(), wordlist.end(), [](std::string const &a, std::string const &b){
 		for (uint32_t i = 0; i < a.size() && i < b.size(); ++i) {
@@ -622,7 +606,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		}*/
 	}
 
-	//let's re-id by reference frequency (not sure how useful, but worth a shot:
+	//let's re-id by reference frequency (not sure how useful, but worth a shot):
 	if (params.re_id == Params::RefCount) {
 		std::multimap< uint32_t, Node * > by_refs;
 		for (auto n : unique.store) {
@@ -654,37 +638,6 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		assert(params.re_id == Params::None);
 	}
 
-	{ //re-id by trying to minimize refs storage:
-		std::vector< std::vector< int32_t > > refs;
-
-		{ //build list of references:
-			std::deque< Node * > todo;
-			todo.push_back(&root);
-			while (!todo.empty()) {
-				Node *n = todo.front();
-				todo.pop_front();
-
-				refs.emplace_back();
-
-				for (auto cn : *n) {
-					if (cn.second->refs == 1 || (params.inline_single && cn.second->size() == 0)) {
-						//will be stored inline
-						todo.emplace_back(cn.second);
-					} else {
-						//will be stored by reference
-						refs.back().push_back(cn.second->id);
-					}
-				}
-				std::sort(refs.back().begin(), refs.back().end());
-
-				if (refs.back().empty()) {
-					refs.pop_back();
-				}
-			}
-		}
-
-	}
-
 	std::vector< std::pair< Context, int32_t > > s_letters;
 	std::vector< std::pair< Context, int32_t > > s_terminals;
 	std::vector< std::pair< Context, int32_t > > s_child_counts;
@@ -698,126 +651,209 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 	std::vector< std::pair< Context, int32_t > > s_id_deltas;
 	std::vector< std::pair< Context, int32_t > > s_ids;
 
+	{ //everything that gets referenced more than once gets stored as a separate blob:
 
-	{ //store tree in fragments by refs
-
-		std::map< uint32_t, uint32_t > id_refs;
-		std::map< uint32_t, uint32_t > refs_hist;
-
-		//let's store by (descending) id:
+		//store by (descending) id:
 		std::vector< std::pair< uint32_t, Node * > > by_id;
 		for (auto n : unique.store) {
 			by_id.emplace_back(n->id, n);
 		}
 		std::sort(by_id.rbegin(), by_id.rend());
+
+		std::unordered_set< Node * > stored; //keep track as a sanity check
+
+		double total_bits = 0.0;
+
 		for (auto seed_ : by_id) {
 			Node *seed = seed_.second;
-			if (seed->refs == 1 || (params.inline_single && seed->size() == 0)) continue; //nope, don't need it
 
-			if (seed->refs == 0) {
-				//don't store letter for root
-				assert(seed->src == '\0');
+			if (seed->refs != 0) {
+				//skip everything except root for the moment.
+				continue;
+			}
 
-			} else {
-				assert(seed->src != '\0');
-				s_letters.emplace_back(Context(), seed->src);
+			if (seed->refs == 1) {
+				assert(stored.count(seed)); //should have already stored
+				continue; //nope, don't need it
+			}
 
-				if (params.only_root) {
-					continue;
+
+			//peel fragment into plys:
+			std::list< Ply > plys;
+			plys.emplace_back(seed);
+
+			while (!plys.back().data.empty()) {
+				plys.emplace_back(&plys.back());
+			}
+			plys.pop_back();
+
+			std::cout << "Peeled into " << plys.size() << " plys:" << std::endl;
+			for (auto &ply : plys) {
+				std::cout << "    " << ply.data.size() << " nodes, " << ply.feature_count << " features." << std::endl;
+				for (auto &d : ply.data) {
+					assert(!stored.count(d.node));
+					stored.insert(d.node);
 				}
 			}
 
-			uint32_t fragment_size = 0;
+			double fragment_bits = 0.0;
 
-			std::deque< Node * > todo;
-			todo.push_back(seed);
-			while (!todo.empty()) {
-				Node *n = todo.front();
-				todo.pop_front();
-				++fragment_size;
-
-				std::vector< std::pair< char, Node * > > children;
-				std::vector< uint32_t > ids;
-				for (auto cn : *n) {
-					assert(cn.second->refs >= 1);
-					//store refs == 1 nodes or nodes with no children inline:
-					if (cn.second->refs == 1 || (params.inline_single && cn.second->size() == 0)) {
-						//will be stored inline
-						children.emplace_back(cn.first, cn.second);
-					} else {
-						//will be stored by reference
-						ids.push_back(cn.second->id);
-						id_refs.insert(std::make_pair(cn.second->id, 0)).first->second += 1;
-					}
+			//Okay, figure out a good order in which to compress each ply (?)
+			std::vector< uint32_t > stored;
+			for (auto &ply : plys) {
+				std::vector< uint32_t > inds;
+				inds.reserve(ply.data.size());
+				for (uint32_t i = 0; i < ply.data.size(); ++i) {
+					inds.emplace_back(i);
 				}
-				//store ids in order:
-				std::sort(ids.begin(), ids.end());
-				//store children in order as well (should already be sorted -- map):
-				std::sort(children.begin(), children.end());
 
-			/*
-				//HACK: randomize to see how bad this might be:
-				for (uint32_t i = 0; i < children.size(); ++i) {
-					std::swap(children[i], children[i + (rand() % (children.size() - i))]);
+				std::vector< uint32_t > to_store;
+				to_store.reserve(ply.feature_count);
+				for (uint32_t f = ply.first_feature; f < ply.first_feature + ply.feature_count; ++f) {
+					to_store.emplace_back(f);
 				}
-			*/
 
-				refs_hist.insert(std::make_pair(ids.size(), 0)).first->second += 1;
-
-				Context context;
-				context("letter", n->src);
-				s_terminals.emplace_back(context, n->terminal ? 1 : 0);
-				context("terminal", n->terminal ? 1 : 0);
-
-				s_child_counts.emplace_back(context, children.size());
-				context("#children", children.size());
-				s_id_counts.emplace_back(context, ids.size());
-				context("#ids", ids.size());
-
-
-				if (!children.empty()) { //children
-					for (auto c : children) {
-						s_all_letters.emplace_back(context, c.first);
-					}
-					s_first_letters.emplace_back(context, children[0].first);
-					for (uint32_t i = 1; i < children.size(); ++i) {
-						s_letter_deltas.emplace_back(context, children[i].first - children[i-1].first);
-					}
-				}
-				if (!ids.empty()) {
-					for (auto id : ids) {
-						s_ids.emplace_back(context, id);
-					}
-					s_first_ids.emplace_back(context, ids[0]);
-					for (uint32_t i = 1; i < ids.size(); ++i) {
-						s_id_deltas.emplace_back(context, ids[i] - ids[i-1]);
+				std::vector< std::vector< int32_t > > feats(ply.first_feature + ply.feature_count, std::vector< int32_t >(ply.data.size()));
+				for (uint32_t f = 0; f < feats.size(); ++f) {
+					for (uint32_t d = 0; d < feats[f].size(); ++d) {
+						feats[f][d] = ply.get_feature(d, f);
 					}
 				}
 
-				for (auto c : children) {
-					todo.push_back(c.second);
+				//sort re-sorts the indices based on the current feature priority:
+				auto sort = [&stored, &to_store, &inds, &feats]() {
+					assert(to_store.size() + stored.size() == feats.size());
+					std::sort(inds.begin(), inds.end(), [&](uint32_t a, uint32_t b){
+						for (auto const f : stored) {
+							int32_t fa = feats[f][a];
+							int32_t fb = feats[f][b];
+							if (fa != fb) return fa < fb;
+						}
+						for (auto const f : to_store) {
+							int32_t fa = feats[f][a];
+							int32_t fb = feats[f][b];
+							if (fa != fb) return fa < fb;
+						}
+						return false;
+					});
+				};
+
+				static std::mt19937 mt(0xfeedbeef);
+				
+				double ply_bits = 0.0;
+
+				std::cout << " " << ply.data.size() << " nodes x " << ply.feature_count << " features:" << std::endl;
+				while (!to_store.empty()) {
+					assert(to_store.size() + stored.size() == ply.first_feature + ply.feature_count);
+
+					//TODO: some sort of more reasonable search for the best order
+					std::sort(to_store.begin(), to_store.end());
+					//std::swap(to_store[0], to_store[mt() % to_store.size()]);
+
+					std::cout << "   " << ply.first_feature << "+" << to_store[0] - ply.first_feature << ":"; std::cout.flush();
+
+					double best_bits = std::numeric_limits< double >::infinity();
+					uint32_t best_first = -1U;
+					uint32_t first = 0;
+					for (uint32_t iter = 0; iter < 1000; ++iter) {
+						//try all sorts of features as "most important":
+						first = first + 1;
+						if (first > stored.size()) first = 0;
+
+						for (uint32_t i = 0; i < stored.size(); ++i) {
+							if (stored[i] == first) {
+								std::swap(stored[i], stored[0]);
+								break;
+							}
+						}
+						//randomize importance of the other ones:
+						for (uint32_t i = 1; i < stored.size(); ++i) {
+							std::swap(stored[i], stored[i + mt() % (stored.size() - i)]);
+						}
+
+						//always sort preserving the selected value:
+						for (uint32_t i = 1; i < to_store.size(); ++i) {
+							std::swap(to_store[i], to_store[i + mt() % (to_store.size() - i)]);
+						}
+						sort();
+
+
+						std::vector< int32_t > data;
+						std::vector< int32_t > data2;
+
+						if (to_store[0] - ply.first_feature > Ply::FirstId) {
+							//we glom 'em, so no data here.
+							best_bits = 0.0;
+							best_first = 0;
+							break;
+						} else if (to_store[0] - ply.first_feature == Ply::FirstId) {
+							for (auto i : inds) {
+								PlyData &d = ply.data[i];
+								bool first = true;
+								for (auto id : d.ids) {
+									if (first) {
+										data.emplace_back(id);
+										first = false;
+									} else {
+										data2.emplace_back(id);
+									}
+								}
+							}
+						} else {
+							for (auto i : inds) {
+								data.emplace_back(feats[to_store[0]][i]);
+							}
+							assert(data.size() == inds.size());
+							assert(inds.size() > 0); //DEBUGRGH!!!
+						}
+
+						//trim zeros:
+						while (!data.empty() && data.back() == 0) {
+							data.pop_back();
+						}
+						while (!data.empty() && data[0] == 0) {
+							data.erase(data.begin());
+						}
+
+						double test_bits = est_bits_helper(data2);
+
+						if (data.size() > 1) {
+							for (uint32_t i = 0; i + 1 < data.size(); ++i) {
+								data[i] = data[i+1] - data[i];
+							}
+							data.pop_back();
+
+							test_bits += est_bits_helper(data);
+						}
+
+						if (test_bits < best_bits) {
+							best_bits = test_bits;
+							best_first = first;
+						}
+						if (test_bits == 0) break;
+					}
+
+					std::cout << " " << std::ceil(best_bits / 8.0) << " [" << best_first << "]" << std::endl;
+
+					ply_bits += best_bits;
+
+					stored.push_back(to_store[0]);
+					to_store.erase(to_store.begin());
 				}
-			}
+				std::cout << " ----> " << std::ceil(ply_bits / 8.0) << " bytes" << std::endl;
+				fragment_bits += ply_bits;
 
-		}
+			} //for (plys)
+
+			total_bits += fragment_bits;
 
 
-		if (params.verbose) {
-			for (auto h : refs_hist) {
-				std::cout << h.first << " refs: " << h.second << std::endl;
-			}
+		} //for (seeds)
 
-			std::map< uint32_t, uint32_t > uses_hist;
-			for (auto r : id_refs) {
-				uses_hist.insert(std::make_pair(r.second, 0)).first->second += 1;
-			}
-			for (auto h : uses_hist) {
-				std::cout << h.first << " uses: " << h.second << std::endl;
-			}
-
-		}
+		std::cout << "Total bytes: " << std::ceil(total_bits / 8.0) << std::endl;
 
 	}
+
 
 
 /*
@@ -832,35 +868,6 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 		s_first_ids[0].second = 0;
 	}
 */
-	std::cout << "-------" << std::endl;
-	REPORT(s_ids);
-
-	std::cout << "   vs  " << std::endl;
-	REPORT(s_first_ids);
-	REPORT(s_id_deltas);
-
-	std::cout << "-------" << std::endl;
-	REPORT(s_all_letters);
-
-	std::cout << "   vs  " << std::endl;
-	REPORT(s_first_letters);
-	REPORT(s_letter_deltas);
-	std::cout << "-------" << std::endl;
-
-
-	double bits = 
-		REPORT(s_letters)
-		+ REPORT(s_terminals)
-		+ REPORT(s_child_counts)
-		+ REPORT(s_first_letters)
-		+ REPORT(s_letter_deltas)
-		+ REPORT(s_id_counts)
-		//+ REPORT(s_ids)
-		+ REPORT(s_first_ids)
-		+ REPORT(s_id_deltas)
-	;
-	bits += d_bits;
-	std::cout << "[" << params.describe() << "] " << std::ceil(bits / 8.0) << " bytes." << std::endl;
 
 }
 
@@ -886,12 +893,9 @@ int main(int argc, char **argv) {
 	params.verbose = true;
 	params.letter_map = Params::ByFrequency;
 	params.re_id = Params::RefCount;
-	params.inline_single = false;
 	params.reverse = false;
 	params.split = Params::SingleSplit;
 	params.only_root = false;
-	params.core_start = 0;
-	params.core_length = -1U;
 	compress(wordlist, params);
 #else
 	params.verbose = false;
@@ -899,13 +903,11 @@ int main(int argc, char **argv) {
 
 	for (int letter_map = 0; letter_map < Params::MapCount; ++letter_map)
 	for (int re_id = 0; re_id < Params::IdCount; ++re_id)
-	for (int inline_single = 0; inline_single < 2; ++inline_single)
 	for (int reverse = 0; reverse < 2; ++reverse)
 	{
 
 		params.letter_map = (Params::LetterMap)letter_map;
 		params.re_id = (Params::ReID)re_id;
-		params.inline_single = inline_single;
 		params.reverse = reverse;
 		uint32_t iters = 1;
 		/*if (params.re_id == Params::Random) {
