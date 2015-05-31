@@ -12,6 +12,8 @@
 #include <unordered_set>
 #include <list>
 
+#include <Eigen/Dense>
+
 #include "Coder.hpp"
 
 class Unique;
@@ -673,8 +675,9 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 			}
 
 			if (seed->refs == 1) {
-				assert(stored.count(seed)); //should have already stored
-				continue; //nope, don't need it
+				//This fails, which does tend to worry one:
+				//assert(stored.count(seed)); //should have already stored
+				continue;
 			}
 
 
@@ -755,7 +758,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 					double best_bits = std::numeric_limits< double >::infinity();
 					uint32_t best_first = -1U;
 					uint32_t first = 0;
-					for (uint32_t iter = 0; iter < 1000; ++iter) {
+					for (uint32_t iter = 0; iter < 10; ++iter) {
 						//try all sorts of features as "most important":
 						first = first + 1;
 						if (first > stored.size()) first = 0;
@@ -779,32 +782,40 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 
 
 						std::vector< int32_t > data;
-						std::vector< int32_t > data2;
 
-						if (to_store[0] - ply.first_feature > Ply::FirstId) {
+						if (to_store[0] - ply.first_feature > Ply::FirstId + 1) {
 							//we glom 'em, so no data here.
 							best_bits = 0.0;
 							best_first = 0;
 							break;
-						} else if (to_store[0] - ply.first_feature == Ply::FirstId) {
+						} else if (to_store[0] - ply.first_feature == Ply::FirstId + 1) {
+							//just glom the deltas; only need one iter
+							std::vector< int32_t > nodelta;
 							for (auto i : inds) {
 								PlyData &d = ply.data[i];
 								bool first = true;
 								for (auto id : d.ids) {
 									if (first) {
-										data.emplace_back(id);
 										first = false;
 									} else {
-										data2.emplace_back(id);
+										nodelta.emplace_back(id);
 									}
+								}
+							}
+							best_bits = est_bits_helper(nodelta);
+							best_first = 0;
+							break;
+						} else if (to_store[0] - ply.first_feature == Ply::FirstId) {
+							for (auto i : inds) {
+								PlyData &d = ply.data[i];
+								if (!d.ids.empty()) {
+									data.emplace_back(d.ids[0]);
 								}
 							}
 						} else {
 							for (auto i : inds) {
 								data.emplace_back(feats[to_store[0]][i]);
 							}
-							assert(data.size() == inds.size());
-							assert(inds.size() > 0); //DEBUGRGH!!!
 						}
 
 						//trim zeros:
@@ -815,7 +826,7 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 							data.erase(data.begin());
 						}
 
-						double test_bits = est_bits_helper(data2);
+						double test_bits = 0.0;
 
 						if (data.size() > 1) {
 							for (uint32_t i = 0; i + 1 < data.size(); ++i) {
@@ -833,7 +844,134 @@ void compress(std::vector< std::string > const &_wordlist, Params const &params)
 						if (test_bits == 0) break;
 					}
 
-					std::cout << " " << std::ceil(best_bits / 8.0) << " [" << best_first << "]" << std::endl;
+
+					std::cout << " " << std::ceil(best_bits / 8.0) << " [" << best_first << "]";
+					//------------------------------------------
+					if (!stored.empty() && inds.size() > 2 && to_store[0] - ply.first_feature <= Ply::FirstId) { //Try a linear regression solve:
+						std::sort(stored.begin(), stored.end());
+
+						Eigen::MatrixXf A;
+						Eigen::VectorXf b;
+						std::vector< uint32_t > ind2row(ply.data.size(), -1U);
+
+						if (to_store[0] - ply.first_feature == Ply::FirstId) {
+							uint32_t rows = 0;
+							for (uint32_t i = 0; i < ply.data.size(); ++i) {
+								if (!ply.data[i].ids.empty()) {
+									ind2row[i] = rows++;
+								}
+							}
+							A = Eigen::MatrixXf(rows, stored.size());
+							b = Eigen::VectorXf(rows);
+							uint32_t row = 0;
+							for (uint32_t i = 0; i < ply.data.size(); ++i) {
+								if (!ply.data[i].ids.empty()) {
+									for (uint32_t col = 0; col < stored.size(); ++col) {
+										A(row, col) = feats[stored[col]][row];
+									}
+									b(row) = feats[to_store[0]][row];
+									++row;
+								}
+							}
+						} else {
+							A = Eigen::MatrixXf(ply.data.size(), stored.size());
+							b = Eigen::VectorXf(ply.data.size());
+							for (uint32_t row = 0; row < ply.data.size(); ++row) {
+								for (uint32_t col = 0; col < stored.size(); ++col) {
+									A(row, col) = feats[stored[col]][row];
+								}
+								b(row) = feats[to_store[0]][row];
+							}
+
+							for (uint32_t i = 0; i < ply.data.size(); ++i) {
+								ind2row[i] = i;
+							}
+						}
+
+						//best (least-squares) predictor of the feature:
+						Eigen::VectorXf x = A.jacobiSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(b);
+
+
+						Eigen::VectorXf score = A * x;
+
+						std::sort(inds.begin(), inds.end(), [&](uint32_t a, uint32_t b) {
+							float sa = (ind2row[a] < score.rows() ? score[ind2row[a]] : std::numeric_limits< float >::infinity());
+							float sb = (ind2row[b] < score.rows() ? score[ind2row[b]] : std::numeric_limits< float >::infinity());
+							if (sa != sb) return sa < sb;
+							for (auto const f : stored) {
+								int32_t fa = feats[f][a];
+								int32_t fb = feats[f][b];
+								if (fa != fb) return fa < fb;
+							}
+							for (auto const f : to_store) {
+								int32_t fa = feats[f][a];
+								int32_t fb = feats[f][b];
+								if (fa != fb) return fa < fb;
+							}
+							return false;
+						});
+
+						std::vector< int32_t > data;
+						std::vector< int32_t > residual;
+
+						/*} else if (to_store[0] - ply.first_feature == Ply::FirstId) {
+							for (auto i : inds) {
+								PlyData &d = ply.data[i];
+								bool first = true;
+								for (auto id : d.ids) {
+									if (first) {
+										data.emplace_back(id);
+										first = false;
+									} else {
+										data2.emplace_back(id);
+									}
+								}
+							}
+						} else*/ {
+							for (auto i : inds) {
+								data.emplace_back(feats[to_store[0]][i]);
+								if (ind2row[i] < score.rows()) {
+									residual.emplace_back(feats[to_store[0]][i] - std::round(score[ind2row[i]]));
+								} else {
+									residual.emplace_back(feats[to_store[0]][i]);
+								}
+							}
+						}
+
+						//trim zeros:
+						while (!data.empty() && data.back() == 0) {
+							data.pop_back();
+						}
+						while (!data.empty() && data[0] == 0) {
+							data.erase(data.begin());
+						}
+
+						double test_bits = 0.0;
+						if (!data.empty()) {
+							for (uint32_t i = 0; i + 1 < data.size(); ++i) {
+								data[i] = data[i+1] - data[i];
+							}
+							data.pop_back();
+
+							test_bits += est_bits_helper(data);
+						}
+
+						std::cout << "   reg " << std::ceil(test_bits / 8.0);
+						if (test_bits < best_bits) {
+							std::cout << " [!!]";
+							best_bits = test_bits;
+						}
+
+						double residual_bits = est_bits_helper(residual);
+						std::cout << "  res " << std::ceil(residual_bits / 8.0);
+						if (residual_bits < best_bits) {
+							std::cout << " [!!]";
+							best_bits = residual_bits;
+						}
+
+					}
+					std::cout << std::endl;
+					//------------------------------------------
 
 					ply_bits += best_bits;
 

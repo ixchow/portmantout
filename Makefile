@@ -29,7 +29,7 @@ check-fasterer : check-fasterer.cpp stopwatch.hpp
 	$(CPP) -o $@ $<
 
 compress : compress.cpp Coder.cpp Coder.hpp
-	$(CPP) -o $@ compress.cpp Coder.cpp
+	$(CPP) -o $@ -I/usr/include/eigen3 compress.cpp Coder.cpp
 
 compress-tests : compress-tests.cpp
 	$(CPP) -o $@ $<
