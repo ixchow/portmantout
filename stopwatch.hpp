@@ -15,6 +15,8 @@ void stopwatch(const char *name) {
 	}
 	double elapsed = double(now - prev) * abs_to_sec;
 	std::cout << name << ": " << elapsed  * 1000.0 << "ms" << std::endl;
+
+	prev = now
 }
 }
 #else
