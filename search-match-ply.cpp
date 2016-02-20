@@ -1,6 +1,8 @@
 #include <limits>
 #include <algorithm>
 #include <map>
+#include <chrono>
+#include <random>
 
 #include "graph.hpp"
 #include "stopwatch.hpp"
@@ -106,7 +108,13 @@ int main(int argc, char **argv) {
 				}
 				if (best.empty()) break;
 				std::cout << "   " << best.size() << " have cost " << best_cost << std::endl;
-				for (auto b : best) {
+				for (auto const &b : best) {
+					{ //randomization
+						static std::mt19937 mt(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+						auto idx = &b - &best[0];
+						std::swap(best[idx], best[mt() % (best.size() - idx) + idx]);
+						assert(b == best[idx]);
+					}
 					if (used[b.first] || used[b.second]) continue;
 					used[b.first] = true;
 					used[b.second] = true;
