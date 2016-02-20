@@ -33,3 +33,22 @@ compress : compress.cpp Coder.cpp Coder.hpp
 
 compress-tests : compress-tests.cpp
 	$(CPP) -o $@ $<
+
+search-gen : search-gen.cpp
+	$(CPP) -o $@ $<
+
+build-graph : build-graph.cpp stopwatch.hpp graph.hpp
+	$(CPP) -o $@ $<
+
+wordlist.graph : build-graph wordlist.asc
+	./build-graph
+
+build-distances : build-distances.cpp stopwatch.hpp graph.hpp
+	$(CPP) -o $@ $<
+
+distances.table : build-distances wordlist.graph
+	./build-distances
+
+
+search-match : search-match.cpp graph.hpp stopwatch.hpp
+	$(CPP) -o $@ $< blossom5/PMduals.o blossom5/PMexpand.o blossom5/PMinit.o blossom5/PMinterface.o blossom5/PMmain.o blossom5/PMrepair.o blossom5/PMshrink.o blossom5/MinCost/MinCost.o

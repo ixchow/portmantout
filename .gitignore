@@ -5,3 +5,9 @@ check-faster
 check-fasterer
 compress
 compress-tests
+search-gen
+search-match
+build-graph
+build-distances
+wordlist.graph
+distances.table
