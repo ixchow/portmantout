@@ -1,6 +1,8 @@
 #include <limits>
 #include <algorithm>
 #include <map>
+#include <chrono>
+#include <random>
 
 #include "graph.hpp"
 #include "stopwatch.hpp"
@@ -45,7 +47,8 @@ int main(int argc, char **argv) {
 		std::reverse(prefix.begin(), prefix.end());
 		if (prefix.substr(0, 11) == "portmanteau") {
 			start = &m - &maximal[0];
-			std::cout << prefix << std::endl; //DEBUG
+			std::cout << "Using: " << prefix << std::endl; //DEBUG
+			//break; //the x-ending is sometimes worst?
 		}
 	}
 	assert(start != -1U);
@@ -80,51 +83,57 @@ int main(int argc, char **argv) {
 			std::cout << "At " << particles.size() << " particles." << std::endl;
 
 			std::vector< std::pair< uint32_t, uint32_t > > next_particles;
-			std::vector< bool > used(particles.size(), false);
-			while (1) {
-				std::vector< std::pair< uint32_t, uint32_t > > best;
-				int32_t best_cost = std::numeric_limits< int32_t >::max();
-				for (auto const &p1 : particles) {
-					if (used[&p1 - &particles[0]]) continue;
-					for (auto const &p2 : particles) {
-						if (&p2 == &p1) continue;
-						if (used[&p2 - &particles[0]]) continue;
-						if (p2.first == start) continue; //can't merge with start symbol, no matter how much one might wish to
-	
-						//p1 then p2 incurs:
-						int32_t cost = distances[p1.second * maximal.size() + p2.first];
-						cost -= int32_t(graph.depth[maximal[p2.first]]); //basically, cost is -overlap
 
-						if (cost < best_cost) {
-							best_cost = cost;
-							best.clear();
-						}
-						if (cost == best_cost) {
-							best.emplace_back(std::make_pair(&p1 - &particles[0], &p2 - &particles[0]));
-						}
+			std::vector< std::pair< uint32_t, uint32_t > > best;
+			int32_t best_cost = std::numeric_limits< int32_t >::max();
+			for (auto const &p1 : particles) {
+				for (auto const &p2 : particles) {
+					if (&p2 == &p1) continue;
+					if (p2.first == start) continue; //can't merge with start symbol, no matter how much one might wish to
+
+					//p1 then p2 incurs:
+					int32_t cost = distances[p1.second * maximal.size() + p2.first];
+					cost -= int32_t(graph.depth[maximal[p2.first]]); //basically, cost is -overlap
+
+					if (cost < best_cost) {
+						best_cost = cost;
+						best.clear();
+					}
+					if (cost == best_cost) {
+						best.emplace_back(std::make_pair(&p1 - &particles[0], &p2 - &particles[0]));
 					}
 				}
-				if (best.empty()) break;
-				std::cout << "   " << best.size() << " have cost " << best_cost << std::endl;
-				for (auto b : best) {
-					if (used[b.first] || used[b.second]) continue;
-					used[b.first] = true;
-					used[b.second] = true;
-					merges.insert(std::make_pair(particles[b.first].second, particles[b.second].first));
-					next_particles.emplace_back(particles[b.first].first, particles[b.second].second);
-					total_length += distances[particles[b.first].second * maximal.size() + particles[b.second].first];
-				}
-				std::cout << "Total length so far: " << total_length << std::endl;
 			}
-			uint32_t extra = 0;
+			std::cout << "   " << best.size() << " have cost " << best_cost << std::endl;
+			std::vector< bool > used(particles.size(), false);
+
+			for (auto const &b : best) {
+				{ //randomization
+					static bool reported = false;
+					if (!reported) {
+						reported = true;
+						std::cout << "USING RANDOMIZATION! This made things worse at least one time when I tried it." << std::endl;
+					}
+					static std::mt19937 mt(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+					auto idx = &b - &best[0];
+					std::swap(best[idx], best[mt() % (best.size() - idx) + idx]);
+					assert(b == best[idx]);
+				}
+
+				if (used[b.first] || used[b.second]) continue;
+				used[b.first] = true;
+				used[b.second] = true;
+				merges.insert(std::make_pair(particles[b.first].second, particles[b.second].first));
+				next_particles.emplace_back(particles[b.first].first, particles[b.second].second);
+				total_length += distances[particles[b.first].second * maximal.size() + particles[b.second].first];
+			}
 			for (uint32_t p = 0; p < particles.size(); ++p) {
 				if (!used[p]) {
 					next_particles.emplace_back(particles[p]);
-					++extra;
 				}
 			}
-			std::cout << "Had " << extra << " leftover." << std::endl;
 			particles = std::move(next_particles);
+			std::cout << "particles: "  << particles.size() << " total length so far: " << total_length << std::endl;
 		}
 	}
 

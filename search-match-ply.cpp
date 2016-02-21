@@ -48,6 +48,7 @@ int main(int argc, char **argv) {
 		if (prefix.substr(0, 11) == "portmanteau") {
 			start = &m - &maximal[0];
 			std::cout << prefix << std::endl; //DEBUG
+			break; //HACK
 		}
 	}
 	assert(start != -1U);
@@ -108,13 +109,29 @@ int main(int argc, char **argv) {
 				}
 				if (best.empty()) break;
 				std::cout << "   " << best.size() << " have cost " << best_cost << std::endl;
+
+				{ //reverse?
+					static bool reported = false;
+					if (!reported) {
+						reported = true;
+						std::cout << "Reversing the merge list for unknown reasons." << std::endl;
+					}
+					std::reverse(best.begin(), best.end());
+				}
 				for (auto const &b : best) {
+#if 0
 					{ //randomization
+						static bool reported = false;
+						if (!reported) {
+							reported = true;
+							std::cout << "USING RANDOMIZATION! This made things worse at least one time when I tried it." << std::endl;
+						}
 						static std::mt19937 mt(std::chrono::high_resolution_clock::now().time_since_epoch().count());
 						auto idx = &b - &best[0];
 						std::swap(best[idx], best[mt() % (best.size() - idx) + idx]);
 						assert(b == best[idx]);
 					}
+#endif
 					if (used[b.first] || used[b.second]) continue;
 					used[b.first] = true;
 					used[b.second] = true;
