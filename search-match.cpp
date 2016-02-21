@@ -107,8 +107,10 @@ int main(int argc, char **argv) {
 			std::cout << "   " << best.size() << " have cost " << best_cost << std::endl;
 			std::vector< bool > used(particles.size(), false);
 
+			std::reverse(best.begin(), best.end()); //who knows?
+
 			for (auto const &b : best) {
-				{ //randomization
+				/*{ //randomization
 					static bool reported = false;
 					if (!reported) {
 						reported = true;
@@ -118,7 +120,7 @@ int main(int argc, char **argv) {
 					auto idx = &b - &best[0];
 					std::swap(best[idx], best[mt() % (best.size() - idx) + idx]);
 					assert(b == best[idx]);
-				}
+				}*/
 
 				if (used[b.first] || used[b.second]) continue;
 				used[b.first] = true;
@@ -133,6 +135,7 @@ int main(int argc, char **argv) {
 				}
 			}
 			particles = std::move(next_particles);
+
 			std::cout << "particles: "  << particles.size() << " total length so far: " << total_length << std::endl;
 		}
 	}
