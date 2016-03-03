@@ -135,11 +135,13 @@ int main(int argc, char **argv) {
 	//set indices:
 	std::vector< Node * > nodes;
 	uint32_t adjacencies = 0;
+	uint32_t children = 0;
 	{
 		std::function< void(Node *) > index = [&](Node *n) {
 			n->index = nodes.size();
 			nodes.emplace_back(n);
 
+			children += n->size();
 			adjacencies += n->size();
 			//add valid next steps from rewind pointers:
 			if (n->terminal) {
@@ -181,17 +183,27 @@ int main(int argc, char **argv) {
 	// - (at a terminal node) a marked next letter for some [non-root!] rewind of this node
 
 	Graph graph;
-	graph.resize(nodes.size(), adjacencies);
+	graph.resize(nodes.size(), adjacencies, children);
 
 	{
 		auto adj_start = graph.adj_start;
 		auto adj = graph.adj;
 		auto adj_char = graph.adj_char;
 
+		auto child_start = graph.child_start;
+		auto child = graph.child;
+		auto child_char = graph.child_char;
+
 		for (auto const &n : nodes) {
 			assert(&n - &nodes[0] == n->index);
 			*(adj_start++) = adj - graph.adj;
+			*(child_start++) = child - graph.child;
 			std::vector< std::pair< char, Node * > > valid(n->begin(), n->end());
+			std::stable_sort(valid.begin(), valid.end());
+			for (auto v : valid) {
+				*(child_char++) = v.first;
+				*(child++) = v.second->index;
+			}
 			if (n->terminal) {
 				for (Node *r = n->rewind; r != &root; r = r->rewind) {
 					assert(r);
@@ -205,16 +217,22 @@ int main(int argc, char **argv) {
 			}
 		}
 		*(adj_start++) = adj - graph.adj;
+		*(child_start++) = child - graph.child;
 
 		assert(adj == graph.adj + adjacencies);
 		assert(adj_char == graph.adj_char + adjacencies);
 		assert(adj_start == graph.adj_start + nodes.size() + 1);
+
+		assert(child == graph.child + children);
+		assert(child_char == graph.child_char + children);
+		assert(child_start == graph.child_start + nodes.size() + 1);
 	}
 
 	{
 		auto depth = graph.depth;
 		auto maximal = graph.maximal;
 		auto parent = graph.parent;
+		auto rewind = graph.rewind;
 
 		for (uint32_t i = 0; i < nodes.size(); ++i) {
 			assert(nodes[i]->index == i);
@@ -226,10 +244,16 @@ int main(int argc, char **argv) {
 				assert(i == 0);
 				*(parent++) = -1U;
 			}
+			if (nodes[i]->rewind) {
+				*(rewind++) = nodes[i]->rewind->index;
+			} else {
+				*(rewind++) = -1U;
+			}
 		}
 		assert(depth   == graph.depth + nodes.size());
 		assert(maximal == graph.maximal + nodes.size());
 		assert(parent  == graph.parent + nodes.size());
+		assert(rewind  == graph.rewind + nodes.size());
 	}
 
 	stopwatch("build");

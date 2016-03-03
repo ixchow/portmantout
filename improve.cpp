@@ -38,10 +38,12 @@ int main(int argc, char **argv) {
 	}
 	stopwatch("read graph");
 
+	std::vector< uint32_t > maximal_index(graph.nodes, -1U);
 	std::vector< uint32_t > maximal;
 
 	for (auto m = graph.maximal; m != graph.maximal + graph.nodes; ++m) {
 		if (*m) {
+			maximal_index[m - graph.maximal] = maximal.size();
 			maximal.emplace_back(m - graph.maximal);
 		}
 	}
@@ -73,49 +75,73 @@ int main(int argc, char **argv) {
 	//------------------------------------------
 
 	std::vector< uint32_t > path;
+	uint32_t start_len = 0;
 
 	{
-		std::vector< std::vector< uint32_t > > possible;
-		possible.reserve(portmantout.size() + 1);
-		possible.emplace_back(1, 0);
+		uint32_t at = 0;
+		uint32_t letter = 0;
 		for (auto c : portmantout) {
-			assert(!possible.back().empty());
-			std::unordered_set< uint32_t > next;
-			for (auto n : possible.back()) {
-				assert(n < graph.nodes);
-				assert(graph.adj_start[n+1] <= graph.adjacencies);
-				for (uint32_t a = graph.adj_start[n]; a < graph.adj_start[a+1]; ++a) {
-					if (graph.adj_char[a] == c) {
-						next.insert(graph.adj[a]);
+			assert(at < graph.nodes);
+			while (at < graph.nodes) {
+				bool found = false;
+				assert(graph.child_start[at+1] <= graph.children);
+				for (uint32_t i = graph.child_start[at]; i < graph.child_start[at+1]; ++i) {
+					if (graph.child_char[i] == c) {
+						at = graph.child[i];
+						found = true;
+						break;
 					}
 				}
+				if (found) break;
+				at = graph.rewind[at];
 			}
-			possible.emplace_back(next.begin(), next.end());
-			std::cout << "[" << possible.back().size() << "] - " << possible.size() << " / " << portmantout.size() << std::endl;
+			assert(at < graph.nodes);
+			assert(at != 0);
+			if (graph.maximal[at]) {
+				assert(maximal_index[at] < maximal.size());
+				path.emplace_back(maximal_index[at]);
+				if (path.size() == 1) {
+					start_len = letter + 1;
+				}
+			}
+			++letter;
 		}
-		assert(!possible.back().empty());
 	}
-
 	stopwatch("compute path");
-/*
-	//goal: greedy (randomized) unification from lowest to highest cost.
+
+	std::cout << "Path has " << path.size() << " maximals (of " << maximal.size() << ")" << std::endl;
+
 	{
 		uint32_t len = start_len;
-		uint32_t at = start;
-		while (1) {
-			path.emplace_back(maximal[at]);
-			auto f = merges.find(at);
-			if (f == merges.end()) break;
-			len += distances[at * maximal.size() + f->second];
-			at = f->second;
+		for (uint32_t i = 0; i + 1 < path.size(); ++i) {
+			len += distances[path[i] * maximal.size() + path[i+1]];
 		}
-		std::cout << "Path of " << path.size() << " steps (extracted from " << merges.size() << " merges) -- len " << len << std::endl;
-		std::string filename = "path-" + std::to_string(len) + ".dump";
+		std::cout << "Expected length " << len << " vs real length " << portmantout.size() << std::endl;
+	}
+
+	/*bool done = false;
+	while (!done) {
+		done = true;
+
+		//See if there are any non-optimal transitions in there:
+
+	}*/
+
+	{
+		uint32_t len = start_len;
+		for (uint32_t i = 0; i + 1 < path.size(); ++i) {
+			len += distances[path[i] * maximal.size() + path[i+1]];
+		}
+		std::vector< uint32_t > dump;
+		for (auto p : path) {
+			assert(p < maximal.size());
+			dump.emplace_back(maximal[p]);
+		}
+		std::string filename = "improved-" + std::to_string(len) + ".dump";
 		std::cout << "Writing to '" << filename << "'" << std::endl;
 		std::ofstream out(filename);
-		out.write(reinterpret_cast< const char * >(&path[0]), 4 * path.size());
+		out.write(reinterpret_cast< const char * >(&dump[0]), 4 * dump.size());
 	}
-*/
 
 
 }
