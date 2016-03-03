@@ -53,6 +53,9 @@ distances.table : build-distances wordlist.graph
 search-match : search-match.cpp graph.hpp stopwatch.hpp
 	$(CPP) -o $@ $< blossom5/PMduals.o blossom5/PMexpand.o blossom5/PMinit.o blossom5/PMinterface.o blossom5/PMmain.o blossom5/PMrepair.o blossom5/PMshrink.o blossom5/MinCost/MinCost.o
 
+improve : improve.cpp graph.hpp stopwatch.hpp
+	$(CPP) -o $@ $< #blossom5/PMduals.o blossom5/PMexpand.o blossom5/PMinit.o blossom5/PMinterface.o blossom5/PMmain.o blossom5/PMrepair.o blossom5/PMshrink.o blossom5/MinCost/MinCost.o
+
 search-match-ply : search-match-ply.cpp graph.hpp stopwatch.hpp
 	$(CPP) -o $@ $< #blossom5/PMduals.o blossom5/PMexpand.o blossom5/PMinit.o blossom5/PMinterface.o blossom5/PMmain.o blossom5/PMrepair.o blossom5/PMshrink.o blossom5/MinCost/MinCost.o
 

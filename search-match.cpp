@@ -13,12 +13,14 @@ struct {
 	std::string prefix = "portmanteaux";
 	std::string merge = "max min"; //"matching"; //"min, matching"; //"matching"; //"min"; //"max min";
 	std::string order = "reverse"; //"random";
+	bool block = true;
 	uint32_t chunk = 2000;
 	void describe() {
 		std::cout << "Options:\n";
 		std::cout << "\tStarting prefix: " << prefix << "\n";
 		std::cout << "\tMerge cost: " << merge << "\n";
 		std::cout << "\tMerge order: " << order << "\n";
+		std::cout << "\tBlocking: " << (block ? "yes" : "no") << "\n";
 		if (merge == "matching") {
 			std::cout << "\tMatching chunk size: " << chunk << "\n";
 		}
@@ -42,6 +44,8 @@ int main(int argc, char **argv) {
 			options.order = value;
 		} else if (tag == "chunk:") {
 			options.chunk = std::atoi(value.c_str());
+		} else if (tag == "block:") {
+			options.block = (value == "true" || value == "yes" || value == "t" || value == "1" || value =="y");
 		} else {
 			std::cerr << "Unknown tag '" << tag << "'" << std::endl;
 			return 1;
@@ -153,7 +157,7 @@ int main(int argc, char **argv) {
 						}
 					}
 					p1_best_cost = -p1_best_cost;
-					if (p1_best_cost < best_cost) {
+					if (!p1_best.empty() && p1_best_cost < best_cost) {
 						best_cost = p1_best_cost;
 						best.clear();
 					}
@@ -162,6 +166,30 @@ int main(int argc, char **argv) {
 					}
 				}
 				std::cout << "   " << best.size() << " have cost " << best_cost << std::endl;
+			} else if (options.merge == "greedy") {
+				for (auto const &p1 : particles) {
+					int32_t p1_best_cost = std::numeric_limits< int32_t >::max();
+					std::vector< std::pair< uint32_t, uint32_t > > p1_best;
+					for (auto const &p2 : particles) {
+						if (&p2 == &p1) continue;
+						if (p2.first == start) continue; //can't merge with start symbol, no matter how much one might wish to
+
+						//p1 then p2 incurs:
+						int32_t cost = distances[p1.second * maximal.size() + p2.first];
+						cost -= int32_t(graph.depth[maximal[p2.first]]); //basically, cost is -overlap
+
+						if (cost < p1_best_cost) {
+							p1_best_cost = cost;
+							p1_best.clear();
+						}
+						if (cost == p1_best_cost) {
+							p1_best.emplace_back(p1.second, p2.first);
+						}
+					}
+					best.insert(best.end(), p1_best.begin(), p1_best.end());
+				}
+				std::cout << "   " << best.size() << " have optimal cost" << std::endl;
+
 			} else if (options.merge == "min" || (options.merge == "min, matching" && particles.size() > options.chunk)) {
 int32_t best_cost = std::numeric_limits< int32_t >::max();
 				for (auto const &p1 : particles) {
@@ -257,6 +285,8 @@ int32_t best_cost = std::numeric_limits< int32_t >::max();
 
 			uint32_t performed = 0;
 
+			std::vector< bool > blocked(particles.size(), false);
+
 			for (auto const &b : best) {
 				assert(b.first < ends.size());
 				assert(b.second < starts.size());
@@ -268,6 +298,12 @@ int32_t best_cost = std::numeric_limits< int32_t >::max();
 				assert(p2 < particles.size());
 
 				if (p1 == p2) continue; //no making loops. not allowed!
+				if (options.block) {
+					if (blocked[p1] || blocked[p2]) continue;
+					blocked[p1] = true;
+					blocked[p2] = true;
+				}
+
 
 				particles[p1].second = particles[p2].second;
 				assert(particles[p2].second < ends.size());
