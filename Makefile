@@ -61,3 +61,17 @@ search-match-ply : search-match-ply.cpp graph.hpp stopwatch.hpp
 
 path-to-word : path-to-word.cpp graph.hpp stopwatch.hpp
 	$(CPP) -o $@ $<
+
+	
+match-dlib : match-dlib.cpp graph.hpp stopwatch.hpp
+	$(CPP) -o $@ $< -Idlib-18.18 -Wno-deprecated-declarations
+
+	
+match-home : match-home.cpp hungarian.hpp graph.hpp stopwatch.hpp
+	$(CPP) -o $@ $< -Idlib-18.18 -Wno-deprecated-declarations
+
+	
+greedy-bound : greedy-bound.cpp graph.hpp stopwatch.hpp
+	$(CPP) -o $@ $< -Idlib-18.18 -Wno-deprecated-declarations
+
+

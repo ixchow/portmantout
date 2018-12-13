@@ -119,13 +119,32 @@ int main(int argc, char **argv) {
 		std::cout << "Expected length " << len << " vs real length " << portmantout.size() << std::endl;
 	}
 
-	/*bool done = false;
+	bool done = false;
 	while (!done) {
 		done = true;
+		{ //See if there are any removable words:
+			std::vector< uint8_t > counts(maximal.size());
+			for (auto p : path) {
+				counts[p] += 1;
+			}
+			for (uint32_t i = 1; i + 1 < path.size(); ++i) {
+				assert(counts[path[i]] >= 1);
+				if (counts[path[i]] == 1) continue;
+				uint32_t start = i;
+				uint32_t end = i;
+				while (end + 1 < path.size()) {
+					assert(counts[path[end]] > 1);
+					counts[path[end]] -= 1;
+					end += 1;
+					assert(counts[path[end]] >= 1);
+					if (counts[path[end]] == 1) break;
+				}
 
-		//See if there are any non-optimal transitions in there:
+			}
+		}
 
-	}*/
+
+	}
 
 	{
 		uint32_t len = start_len;
